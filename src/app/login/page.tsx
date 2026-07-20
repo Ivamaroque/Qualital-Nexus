@@ -14,6 +14,11 @@ export default function LoginPage() {
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
 
+    if (!supabase) {
+      setMessage("Configuração do Supabase ausente. Defina NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY.");
+      return;
+    }
+
     supabase.auth.getSession().then(({ data }) => {
       if (data.session) {
         router.replace("/dashboard");
@@ -38,6 +43,12 @@ export default function LoginPage() {
 
     try {
       const supabase = getSupabaseBrowserClient();
+
+      if (!supabase) {
+        setMessage("Configuração do Supabase ausente. Defina NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY.");
+        return;
+      }
+
       const { error } = await supabase.auth.signInWithPassword({
         email,
         password

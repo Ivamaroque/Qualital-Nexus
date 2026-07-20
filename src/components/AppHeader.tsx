@@ -24,7 +24,11 @@ export function AppHeader({ title, subtitle, userName, userEmail }: AppHeaderPro
 
   async function handleLogout() {
     const supabase = getSupabaseBrowserClient();
-    await supabase.auth.signOut();
+
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
+
     router.replace("/login");
   }
 

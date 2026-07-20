@@ -18,6 +18,12 @@ function DashboardContent() {
     async function loadProfile() {
       try {
         const supabase = getSupabaseBrowserClient();
+
+        if (!supabase) {
+          setError("Configuração do Supabase ausente. Defina NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY.");
+          return;
+        }
+
         const { data: sessionData } = await supabase.auth.getUser();
 
         if (!sessionData.user) {

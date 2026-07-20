@@ -2,6 +2,10 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 let supabaseBrowserClient: SupabaseClient | null = null;
 
+function normalizeSupabaseUrl(url: string) {
+  return url.replace(/\/rest\/v1\/?$/, "").replace(/\/$/, "");
+}
+
 export function getSupabaseBrowserClient() {
   if (supabaseBrowserClient) {
     return supabaseBrowserClient;
@@ -11,9 +15,9 @@ export function getSupabaseBrowserClient() {
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error("Configuração do Supabase ausente. Defina NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY.");
+    return null;
   }
 
-  supabaseBrowserClient = createClient(supabaseUrl, supabaseAnonKey);
+  supabaseBrowserClient = createClient(normalizeSupabaseUrl(supabaseUrl), supabaseAnonKey);
   return supabaseBrowserClient;
 }

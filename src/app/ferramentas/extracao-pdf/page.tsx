@@ -48,6 +48,12 @@ function ExtracaoPdfContent() {
     async function loadProfile() {
       try {
         const supabase = getSupabaseBrowserClient();
+
+        if (!supabase) {
+          setUserName("Usuário Qualital");
+          return;
+        }
+
         const { data: sessionData } = await supabase.auth.getUser();
 
         if (!sessionData.user) {
