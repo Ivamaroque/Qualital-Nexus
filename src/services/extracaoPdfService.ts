@@ -1,42 +1,18 @@
-const FAKE_PROCESSING_DELAY_MS = 4200;
+import { processarExtracaoPdfApi } from "@/services/extracaoPdfApiService";
+import type { ExtracaoPdfRequestOptions, ExtracaoPdfResult } from "@/types/extracaoPdf";
 
-function escapeCsvValue(value: string) {
-  return `"${value.replaceAll('"', '""')}"`;
-}
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
+const extractionApiUrl = process.env.NEXT_PUBLIC_EXTRACAO_PDF_API_URL ?? (apiBaseUrl ? `${apiBaseUrl}/api/extracao-pdf/process` : undefined);
+const extractionApiConfigurationError =
+  "A extração real não está configurada. Defina NEXT_PUBLIC_API_URL ou NEXT_PUBLIC_EXTRACAO_PDF_API_URL e reinicie o frontend.";
 
-function buildFakeCsv(files: File[]) {
-  const header = ["ordem", "arquivo", "tipo", "status"];
-  const rows = files.map((file, index) => [
-    String(index + 1),
-    file.name,
-    file.type || "application/pdf",
-    "processado"
-  ]);
-
-  return [header, ...rows]
-    .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
-    .join("\n");
-}
-
-export async function processarExtracaoPdf(files: File[]): Promise<{
-  filename: string;
-  blob: Blob;
-}> {
-  const invalidFile = files.find((file) => file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf"));
-
-  if (invalidFile) {
-    throw new Error(`O arquivo ${invalidFile.name} não é um PDF.`);
+export async function processarExtracaoPdf(
+  files: File[],
+  options: ExtracaoPdfRequestOptions = {}
+): Promise<ExtracaoPdfResult> {
+  if (!extractionApiUrl) {
+    throw new Error(extractionApiConfigurationError);
   }
 
-  await new Promise((resolve) => {
-    setTimeout(resolve, FAKE_PROCESSING_DELAY_MS);
-  });
-
-  const csv = buildFakeCsv(files);
-  const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
-
-  return {
-    filename: "qualital-nexus-extracao-pdf.csv",
-    blob
-  };
+  return processarExtracaoPdfApi(files, extractionApiUrl, options);
 }

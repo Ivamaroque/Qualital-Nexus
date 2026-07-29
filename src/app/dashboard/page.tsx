@@ -1,55 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AppHeader } from "@/components/AppHeader";
 import { ToolCard } from "@/components/ToolCard";
-import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
+import { useAuthenticatedProfile } from "@/hooks/useAuthenticatedProfile";
 import { tools } from "@/lib/tools";
-import type { Profile } from "@/types/profile";
 
 function DashboardContent() {
-  const [userName, setUserName] = useState("Carregando...");
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    async function loadProfile() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-
-        if (!supabase) {
-          setError("Configuração do Supabase ausente. Defina NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY.");
-          return;
-        }
-
-        const { data: sessionData } = await supabase.auth.getUser();
-
-        if (!sessionData.user) {
-          return;
-        }
-
-        setUserEmail(sessionData.user.email ?? null);
-
-        const { data: profileData, error: profileError } = await supabase
-          .from("profiles")
-          .select("id, full_name, email, role")
-          .eq("id", sessionData.user.id)
-          .maybeSingle<Profile>();
-
-        if (profileError) {
-          throw profileError;
-        }
-
-        setUserName(profileData?.full_name?.trim() || sessionData.user.email || "Usuário Qualital");
-      } catch {
-        setError("Não foi possível carregar o perfil agora. O dashboard seguirá com o e-mail do usuário autenticado.");
-      }
-    }
-
-    loadProfile();
-  }, []);
+  const { displayName, notice, userEmail } = useAuthenticatedProfile();
 
   return (
     <main className="page-shell">
@@ -58,16 +17,23 @@ function DashboardContent() {
           title="Dashboard"
           subtitle="Hub de ferramentas internas do Qualital Nexus"
           userEmail={userEmail}
-          userName={userName}
+          userName={displayName}
         />
 
-        {error ? <div className="alert alert--error">{error}</div> : null}
+        {notice ? (
+          <div
+            className="alert alert--warning"
+            role="status"
+          >
+            {notice}
+          </div>
+        ) : null}
 
         <section className="surface card stack">
           <div className="toolbar">
             <div className="stack" style={{ gap: 8 }}>
               <p className="eyebrow">Bem-vindo</p>
-              <h2 className="title title--lg">Olá, {userName}.</h2>
+              <h2 className="title title--lg">Olá, {displayName}.</h2>
               <p className="text">Escolha uma ferramenta abaixo para continuar o fluxo interno.</p>
             </div>
             <div className="badge">{tools.length} ferramenta disponível</div>

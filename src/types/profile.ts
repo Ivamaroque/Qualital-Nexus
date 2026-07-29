@@ -1,6 +1,6 @@
 export type Profile = {
   id: string;
-  full_name: string | null;
+  nome: string | null;
   email: string | null;
   role: string | null;
 };

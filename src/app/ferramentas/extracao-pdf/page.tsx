@@ -6,9 +6,10 @@ import { AppHeader } from "@/components/AppHeader";
 import { FileOrderList } from "@/components/FileOrderList";
 import { FileUploadArea } from "@/components/FileUploadArea";
 import { ProcessingSteps } from "@/components/ProcessingSteps";
+import { useAuthenticatedProfile } from "@/hooks/useAuthenticatedProfile";
+import { isAllowedExtractionFile } from "@/lib/fileValidation";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 import { processarExtracaoPdf } from "@/services/extracaoPdfService";
-import type { Profile } from "@/types/profile";
 
 type QueueFile = {
   id: string;
@@ -31,8 +32,7 @@ function createQueueFile(file: File): QueueFile {
 }
 
 function ExtracaoPdfContent() {
-  const [userName, setUserName] = useState("Carregando...");
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const { displayName, notice: profileNotice, userEmail } = useAuthenticatedProfile();
   const [files, setFiles] = useState<QueueFile[]>([]);
   const [selectedFileError, setSelectedFileError] = useState<string | null>(null);
   const [processingError, setProcessingError] = useState<string | null>(null);
@@ -45,41 +45,6 @@ function ExtracaoPdfContent() {
   const canProcess = files.length > 0 && !isProcessing;
 
   useEffect(() => {
-    async function loadProfile() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-
-        if (!supabase) {
-          setUserName("Usuário Qualital");
-          return;
-        }
-
-        const { data: sessionData } = await supabase.auth.getUser();
-
-        if (!sessionData.user) {
-          return;
-        }
-
-        setUserEmail(sessionData.user.email ?? null);
-
-        const { data: profileData, error: profileError } = await supabase
-          .from("profiles")
-          .select("id, full_name, email, role")
-          .eq("id", sessionData.user.id)
-          .maybeSingle<Profile>();
-
-        if (profileError) {
-          throw profileError;
-        }
-
-        setUserName(profileData?.full_name?.trim() || sessionData.user.email || "Usuário Qualital");
-      } catch {
-        setUserName((current) => current || "Usuário Qualital");
-      }
-    }
-
-    loadProfile();
-
     return () => {
       timeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
     };
@@ -114,9 +79,9 @@ function ExtracaoPdfContent() {
       return;
     }
 
-    const invalidFile = nextFiles.find((file) => file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf"));
+    const invalidFile = nextFiles.find((file) => !isAllowedExtractionFile(file));
     if (invalidFile) {
-      setSelectedFileError(`O arquivo ${invalidFile.name} não é um PDF.`);
+      setSelectedFileError(`O arquivo ${invalidFile.name} não possui uma extensão permitida.`);
       return;
     }
 
@@ -171,7 +136,17 @@ function ExtracaoPdfContent() {
     );
 
     try {
-      const result = await processarExtracaoPdf(files.map((entry) => entry.file));
+      const supabase = getSupabaseBrowserClient();
+      let accessToken: string | undefined;
+
+      if (supabase) {
+        const { data: sessionData } = await supabase.auth.getSession();
+        accessToken = sessionData.session?.access_token;
+      }
+
+      const result = await processarExtracaoPdf(files.map((entry) => entry.file), {
+        accessToken
+      });
       const url = URL.createObjectURL(result.blob);
       setResultFilename(result.filename);
       setResultUrl(url);
@@ -203,7 +178,7 @@ function ExtracaoPdfContent() {
           title="Extração PDF"
           subtitle="Envie PDFs técnicos em ordem e receba um CSV estruturado."
           userEmail={userEmail}
-          userName={userName}
+          userName={displayName}
         />
 
         <section className="surface card stack hero">
@@ -217,12 +192,34 @@ function ExtracaoPdfContent() {
 
           <div className="row">
             <span className="badge">{selectedCountLabel}</span>
-            <span className="badge">Backend futuro: POST /api/extracao-pdf/process</span>
+            <span className="badge">API: POST /api/extracao-pdf/process</span>
           </div>
         </section>
 
-        {selectedFileError ? <div className="alert alert--error">{selectedFileError}</div> : null}
-        {processingError ? <div className="alert alert--error">{processingError}</div> : null}
+        {profileNotice ? (
+          <div
+            className="alert alert--warning"
+            role="status"
+          >
+            {profileNotice}
+          </div>
+        ) : null}
+        {selectedFileError ? (
+          <div
+            className="alert alert--error"
+            role="alert"
+          >
+            {selectedFileError}
+          </div>
+        ) : null}
+        {processingError ? (
+          <div
+            className="alert alert--error"
+            role="alert"
+          >
+            {processingError}
+          </div>
+        ) : null}
 
         <div className="grid grid--two" style={{ alignItems: "start" }}>
           <div className="stack stack--lg">
@@ -280,7 +277,10 @@ function ExtracaoPdfContent() {
 
               {resultUrl && resultFilename ? (
                 <>
-                  <div className="alert alert--success">
+                  <div
+                    className="alert alert--success"
+                    role="status"
+                  >
                     Processamento concluído. O arquivo {resultFilename} está pronto para download.
                   </div>
                   <button className="button button--primary" type="button" onClick={downloadResult}>

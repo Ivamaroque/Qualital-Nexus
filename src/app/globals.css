@@ -519,3 +519,9 @@ button {
     justify-content: flex-start;
   }
 }
+
+.alert--warning {
+  color: #7a4a00;
+  background: rgba(175, 105, 0, 0.1);
+  border-color: rgba(175, 105, 0, 0.2);
+}

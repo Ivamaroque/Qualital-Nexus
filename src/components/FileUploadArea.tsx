@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { getAllowedExtractionFileLabel } from "@/lib/fileValidation";
 
 type FileUploadAreaProps = {
   onFilesSelected: (files: File[]) => void;
@@ -8,10 +9,6 @@ type FileUploadAreaProps = {
   errorMessage?: string | null;
   disabled?: boolean;
 };
-
-function isPdf(file: File) {
-  return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-}
 
 export function FileUploadArea({ onFilesSelected, fileCount, errorMessage, disabled }: FileUploadAreaProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -30,13 +27,7 @@ export function FileUploadArea({ onFilesSelected, fileCount, errorMessage, disab
       return;
     }
 
-    const nextFiles = Array.from(files);
-    if (nextFiles.some((file) => !isPdf(file))) {
-      onFilesSelected([]);
-      return;
-    }
-
-    onFilesSelected(nextFiles);
+    onFilesSelected(Array.from(files));
   }
 
   return (
@@ -62,7 +53,7 @@ export function FileUploadArea({ onFilesSelected, fileCount, errorMessage, disab
             <h2 className="title" style={{ fontSize: "1.3rem" }}>
               Arraste e solte os PDFs aqui
             </h2>
-            <p className="text text--sm">Aceitamos apenas PDF neste MVP. O suporte a modelo Excel pode entrar depois sem alterar a arquitetura.</p>
+            <p className="text text--sm">Extensões permitidas neste MVP: {getAllowedExtractionFileLabel()}.</p>
           </div>
           <button
             className="button button--secondary"
@@ -86,7 +77,10 @@ export function FileUploadArea({ onFilesSelected, fileCount, errorMessage, disab
         multiple
         accept=".pdf,application/pdf"
         type="file"
-        onChange={(event) => handleFiles(event.target.files)}
+        onChange={(event) => {
+          handleFiles(event.target.files);
+          event.currentTarget.value = "";
+        }}
       />
     </section>
   );
