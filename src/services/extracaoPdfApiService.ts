@@ -15,6 +15,24 @@ function getFilename(contentDisposition: string | null) {
   }
 }
 
+async function getErrorMessage(response: Response) {
+  try {
+    const payload: unknown = await response.json();
+    if (
+      typeof payload === "object" &&
+      payload !== null &&
+      "detail" in payload &&
+      typeof payload.detail === "string"
+    ) {
+      return payload.detail;
+    }
+  } catch {
+    // A resposta de erro pode não conter JSON.
+  }
+
+  return "Não foi possível processar os arquivos. Tente novamente em instantes.";
+}
+
 export async function processarExtracaoPdfApi(
   files: File[],
   endpoint: string,
@@ -32,7 +50,7 @@ export async function processarExtracaoPdfApi(
   });
 
   if (!response.ok) {
-    throw new Error("Não foi possível processar os arquivos. Tente novamente em instantes.");
+    throw new Error(await getErrorMessage(response));
   }
 
   return {

@@ -9,7 +9,7 @@ from starlette.datastructures import UploadFile
 
 from app.core.config import get_settings
 from app.services.csv_service import gerar_csv_matriz
-from app.services.llm_service import LLMConversionError, converter_blocos_com_gpt
+from app.services.llm_service import LLMConversionError, converter_blocos_com_ia
 from app.services.normalizer_service import normalizar_linhas
 from app.services.parser_rules_service import buscar_parser_rules, filtrar_regras_por_bloco
 from app.services.pdf_service import extrair_texto_pdf, limpar_texto_pdf, separar_blocos
@@ -127,12 +127,12 @@ async def _processar_arquivos(arquivos: list[UploadFile], incluir_debug: bool) -
                 "file_order": file_order,
             }
             try:
-                linhas = await run_in_threadpool(converter_blocos_com_gpt, lote, regras_bloco, exemplos, contexto)
+                linhas = await run_in_threadpool(converter_blocos_com_ia, lote, regras_bloco, exemplos, contexto)
             except LLMConversionError as exc:
                 logger.exception("Falha LLM filename=%s categoria=%s", filename, bloco["categoria"])
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Falha ao converter o bloco técnico de {filename}.",
+                    detail=str(exc),
                 ) from exc
             linhas = normalizar_linhas(linhas)
             acumuladas.extend(linhas)

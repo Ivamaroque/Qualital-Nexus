@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,6 +24,10 @@ class Settings(BaseSettings):
 
     openai_api_key: str | None = None
     openai_model: str = "gpt-5-nano"
+    llm_provider: Literal["ollama", "openai"] = "ollama"
+    ollama_base_url: str = "http://localhost:11434/v1"
+    ollama_model: str = "qwen3:8b"
+    ollama_timeout_seconds: int = 300
     extraction_batch_max_chars: int = 40_000
     rag_examples_limit: int = 2
 

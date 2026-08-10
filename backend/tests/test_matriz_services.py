@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.csv_service import gerar_csv_matriz
+from app.services.llm_service import _matriz_de_conteudo_json
 from app.services.normalizer_service import normalizar_linhas
 from app.services.parser_rules_service import filtrar_regras_por_bloco
 from app.services.pdf_service import limpar_texto_pdf, separar_blocos
@@ -14,6 +15,13 @@ from app.routers.extracao_pdf import _agrupar_blocos
 
 
 class MatrizServicesTest(unittest.TestCase):
+    def test_ollama_json_response_is_validated(self):
+        matriz = _matriz_de_conteudo_json(
+            '```json\n{"linhas":[{"descricao":"Executar rotina","tipoTarefa":"Execução"}]}\n```'
+        )
+
+        self.assertEqual(matriz.linhas[0].descricao, "Executar rotina")
+
     def test_batching_preserves_order_and_respects_limit(self):
         blocos = [
             {"ordem": 1, "texto": "aaaa"},
