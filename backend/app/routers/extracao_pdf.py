@@ -138,6 +138,7 @@ async def _processar_arquivos(
         "exemplos_parser_por_bloco": [],
         "regras_usadas_por_bloco": [],
         "preview_linhas_geradas": [],
+        "falhas_lotes": [],
     }
     arquivos_preparados: list[dict[str, Any]] = []
 
@@ -205,7 +206,6 @@ async def _processar_arquivos(
         blocos = arquivo_preparado["blocos"]
         lotes = arquivo_preparado["lotes"]
         for lote_order, lote in enumerate(lotes, start=1):
-            bloco = lote[0]
             regras_bloco = _regras_do_lote(regras, lote)
             exemplos_parser = _exemplos_parser_do_lote(regras_bloco)
             contexto = {
@@ -257,11 +257,35 @@ async def _processar_arquivos(
                     atualizar_progresso_ollama if identificador_processamento else None,
                 )
             except LLMConversionError as exc:
-                logger.exception("Falha LLM filename=%s categoria=%s", filename, bloco["categoria"])
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=str(exc),
-                ) from exc
+                logger.exception(
+                    "Falha LLM filename=%s lote=%s ordens_blocos=%s",
+                    filename,
+                    lote_order,
+                    [bloco_do_lote["ordem"] for bloco_do_lote in lote],
+                )
+                debug["falhas_lotes"].append(
+                    {
+                        "arquivo": filename,
+                        "file_order": file_order,
+                        "lote_order": lote_order,
+                        "ordens_blocos": [bloco_do_lote["ordem"] for bloco_do_lote in lote],
+                        "erro": str(exc),
+                    }
+                )
+                etapas_concluidas += 2
+                if identificador_processamento:
+                    atualizar_processamento(
+                        identificador_processamento,
+                        "parcial",
+                        f"O lote {lote_order} falhou; continuando a extração para gerar um CSV parcial.",
+                        arquivo_atual=file_order,
+                        total_arquivos=len(arquivos),
+                        lote_atual=lote_order,
+                        total_lotes=len(lotes),
+                        etapas_concluidas=etapas_concluidas,
+                        etapas_totais=etapas_totais,
+                    )
+                continue
             etapas_concluidas += 1
             if identificador_processamento:
                 atualizar_processamento(
@@ -323,12 +347,23 @@ async def processar_extracao_pdf(request: Request) -> StreamingResponse:
                 etapas_totais=debug["etapas_totais"],
             )
         csv = gerar_csv_matriz(linhas)
+        falhas_lotes = debug["falhas_lotes"]
+        arquivo_csv = "matriz_priorizacao_parcial.csv" if falhas_lotes else "matriz_priorizacao.csv"
         if identificador:
-            concluir_processamento(identificador)
+            mensagem = (
+                f"CSV parcial gerado com {len(falhas_lotes)} lote(s) sem saída da IA."
+                if falhas_lotes
+                else "CSV gerado e pronto para download."
+            )
+            concluir_processamento(identificador, mensagem, falhas_lotes=falhas_lotes)
         return StreamingResponse(
             io.BytesIO(csv.encode("utf-8")),
             media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": 'attachment; filename="matriz_priorizacao.csv"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{arquivo_csv}"',
+                "X-Extraction-Partial": str(bool(falhas_lotes)).lower(),
+                "X-Extraction-Failures": str(len(falhas_lotes)),
+            },
         )
     except HTTPException as exc:
         if identificador:

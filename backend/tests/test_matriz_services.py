@@ -3,8 +3,11 @@ import io
 import logging
 import sys
 import unittest
+from asyncio import run
 from pathlib import Path
 from unittest.mock import patch
+
+from starlette.datastructures import UploadFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -14,6 +17,8 @@ from app.services.llm_service import (
     LLMConversionError,
     _criar_prompt,
     _normalizar_ordens_da_resposta,
+    _preencher_item_padrao_detectado,
+    _remover_linhas_nao_fundamentadas,
     _matriz_de_conteudo_json,
     _solicitar_ollama_em_stream,
     _validar_cobertura_dos_blocos,
@@ -21,7 +26,7 @@ from app.services.llm_service import (
 )
 from app.services.normalizer_service import normalizar_linhas
 from app.services.parser_rules_service import filtrar_regras_por_bloco, preparar_blocos_para_ia
-from app.services.pdf_service import limpar_texto_pdf, separar_blocos
+from app.services.pdf_service import _serializar_tabela, limpar_texto_pdf, separar_blocos
 from app.schemas.matriz import MatrizLinha, MatrizOutput
 from app.services.processing_status import (
     atualizar_processamento,
@@ -29,7 +34,12 @@ from app.services.processing_status import (
     iniciar_processamento,
     obter_processamento,
 )
-from app.routers.extracao_pdf import _agrupar_blocos, _exemplos_parser_do_lote, _mensagem_progresso_ollama
+from app.routers.extracao_pdf import (
+    _agrupar_blocos,
+    _exemplos_parser_do_lote,
+    _mensagem_progresso_ollama,
+    _processar_arquivos,
+)
 
 
 class MatrizServicesTest(unittest.TestCase):
@@ -39,6 +49,44 @@ class MatrizServicesTest(unittest.TestCase):
         )
 
         self.assertEqual(matriz.linhas[0].descricao, "Executar rotina")
+
+    def test_ollama_legacy_ordem_field_is_mapped_to_ordem_bloco(self):
+        matriz = _matriz_de_conteudo_json(
+            '{"linhas":[{"ordem":9,"descricao":"Atividade","tipoTarefa":"Execução"}]}'
+        )
+
+        self.assertEqual(matriz.linhas[0].ordemBloco, 9)
+
+    def test_processing_continues_after_a_failed_llm_batch(self):
+        blocos = [
+            {
+                "ordem": ordem,
+                "texto": f"Bloco {ordem}",
+                "categoria": "geral",
+                "escopo": "documento_principal",
+                "palavras_chave": [],
+            }
+            for ordem in range(1, 10)
+        ]
+        arquivo = UploadFile(filename="teste.pdf", file=io.BytesIO(b"%PDF-1.4 teste"))
+
+        with (
+            patch("app.routers.extracao_pdf.extrair_texto_pdf", return_value="texto"),
+            patch("app.routers.extracao_pdf.limpar_texto_pdf", return_value="texto"),
+            patch("app.routers.extracao_pdf.separar_blocos", return_value=blocos),
+            patch("app.routers.extracao_pdf.buscar_parser_rules", return_value=[]),
+            patch(
+                "app.routers.extracao_pdf.converter_blocos_com_ia",
+                side_effect=[
+                    LLMConversionError("resposta inválida"),
+                    [{"descricao": "Bloco 9", "tipoTarefa": "Informação"}],
+                ],
+            ),
+        ):
+            linhas, debug = run(_processar_arquivos([arquivo], incluir_debug=False))
+
+        self.assertEqual([linha["descricao"] for linha in linhas], ["Bloco 9"])
+        self.assertEqual(debug["falhas_lotes"][0]["ordens_blocos"], list(range(1, 9)))
 
     def test_prompt_uses_examples_from_selected_parser_rules(self):
         regras = [
@@ -54,8 +102,8 @@ class MatrizServicesTest(unittest.TestCase):
         prompt = _criar_prompt([{"ordem": 9}], regras, exemplos, {"filename": "teste.pdf", "file_order": 1})
 
         self.assertEqual(len(exemplos), 1)
-        self.assertEqual(prompt["exemplos_parser"][0]["nome"], "Como fazer")
-        self.assertNotIn("exemplo_saida_json", prompt["regras_parser"][0])
+        self.assertEqual(prompt["exemplos_parser"][0]["entrada"], "COMO FAZER: Registrar a atividade.")
+        self.assertNotIn("nome", prompt["orientacoes_parser"][0])
         self.assertNotIn("exemplos_rag", prompt)
         self.assertEqual(prompt["ordensBlocoPermitidas"], [9])
 
@@ -132,7 +180,7 @@ class MatrizServicesTest(unittest.TestCase):
 
         self.assertEqual([linha["ordemBloco"] for linha in linhas], [1, 2])
         self.assertEqual(conversor.call_count, 2)
-        self.assertEqual(conversor.call_args_list[1].args[0]["blocos"], [{"ordem": 2, "texto": "Segundo"}])
+        self.assertEqual([bloco["ordem"] for bloco in conversor.call_args_list[1].args[0]["blocos"]], [2])
 
     def test_ia_converts_local_batch_positions_to_global_block_orders(self):
         blocos = [{"ordem": 9}, {"ordem": 10}, {"ordem": 11}]
@@ -147,6 +195,31 @@ class MatrizServicesTest(unittest.TestCase):
         normalizada = _normalizar_ordens_da_resposta(blocos, resposta)
 
         self.assertEqual([linha.ordemBloco for linha in normalizada.linhas], [9, 10, 11])
+
+    def test_parser_completes_detected_item_on_section_title(self):
+        matriz = MatrizOutput(
+            linhas=[MatrizLinha(ordemBloco=1, descricao="3.2 - Atividade", tipoTarefa="Título/Subtítulo")]
+        )
+
+        resultado = _preencher_item_padrao_detectado(
+            [{"ordem": 1, "itemPadraoDetectado": "3.2"}],
+            matriz,
+        )
+
+        self.assertEqual(resultado.linhas[0].itemPadrao, "3.2")
+        self.assertEqual(resultado.linhas[0].descricao, "Atividade")
+
+    def test_parser_discards_metadata_not_found_in_the_source_block(self):
+        matriz = MatrizOutput(
+            linhas=[MatrizLinha(ordemBloco=1, descricao="Contrato CSV da Matriz", tipoTarefa="Informação")]
+        )
+
+        resultado = _remover_linhas_nao_fundamentadas(
+            [{"ordem": 1, "texto": "Atualizar a pressão do sistema."}],
+            matriz,
+        )
+
+        self.assertEqual(resultado.linhas, [])
 
     def test_ia_recovers_missing_global_orders_from_a_local_retry_response(self):
         blocos = [{"ordem": ordem, "texto": f"Bloco {ordem}"} for ordem in range(9, 17)]
@@ -182,10 +255,10 @@ class MatrizServicesTest(unittest.TestCase):
         ) as conversor:
             linhas = converter_blocos_com_ia([bloco], [], [], {"filename": "teste.pdf", "file_order": 1})
 
-        self.assertEqual(conversor.call_count, 3)
+        self.assertEqual(conversor.call_count, 2)
         self.assertEqual(linhas[0]["ordemBloco"], 14)
         self.assertEqual(linhas[0]["tipoTarefa"], "Título/Subtítulo")
-        self.assertEqual(linhas[0]["descricao"], "4.1.2 - Requisito técnico")
+        self.assertEqual(linhas[0]["descricao"], "- Requisito técnico")
 
     def test_ollama_progress_message_covers_retry_state_and_unknown_states(self):
         self.assertIn("omitiu blocos", _mensagem_progresso_ollama("corrigindo_cobertura"))
@@ -255,7 +328,8 @@ class MatrizServicesTest(unittest.TestCase):
         em_andamento = obter_processamento(identificador)
         self.assertIsNotNone(em_andamento)
         self.assertEqual(em_andamento["progresso_percentual"], 40)
-        concluir_processamento(identificador)
+        falhas_lotes = [{"lote_order": 2, "ordens_blocos": [9, 10]}]
+        concluir_processamento(identificador, "CSV parcial gerado.", falhas_lotes=falhas_lotes)
 
         processamento = obter_processamento(identificador)
 
@@ -267,6 +341,8 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(processamento["etapas_concluidas"], 10)
         self.assertEqual(processamento["etapas_totais"], 10)
         self.assertEqual(processamento["progresso_percentual"], 100)
+        self.assertEqual(processamento["mensagem"], "CSV parcial gerado.")
+        self.assertEqual(processamento["falhas_lotes"], falhas_lotes)
 
     def test_status_polling_access_logs_are_hidden_but_errors_remain_visible(self):
         filtro = StatusPollingAccessFilter()
@@ -308,11 +384,35 @@ class MatrizServicesTest(unittest.TestCase):
 
         blocos = separar_blocos(limpar_texto_pdf(texto))
 
-        self.assertEqual([bloco["ordem"] for bloco in blocos], [1, 2, 3])
-        self.assertEqual(blocos[1]["categoria"], "objetivo")
-        self.assertEqual(blocos[2]["categoria"], "como_fazer")
-        self.assertEqual(blocos[2]["escopo"], "anexo_b")
+        self.assertEqual([bloco["ordem"] for bloco in blocos], [1, 2, 3, 4])
+        self.assertEqual(blocos[1]["categoria"], "secao_principal")
+        self.assertEqual(blocos[2]["texto"], "Definir o fluxo.")
+        self.assertEqual(blocos[3]["categoria"], "como_fazer")
+        self.assertEqual(blocos[3]["escopo"], "anexo_b")
         self.assertNotIn("Aprovado", "\n".join(bloco["texto"] for bloco in blocos))
+
+    def test_pdf_parser_removes_repeated_initial_table_of_contents(self):
+        texto = (
+            "PE-3UBA-00263\n1. OBJETIVO\n2. APLICAÇÃO\n3. DESCRIÇÃO\n4. REGISTROS\n5. DEFINIÇÕES\n"
+            "1. OBJETIVO\nDescrever o processo.\n2. APLICAÇÃO\nAplicar na unidade."
+        )
+
+        blocos = separar_blocos(texto)
+
+        self.assertEqual(
+            [bloco["texto"].splitlines()[0] for bloco in blocos],
+            ["PE-3UBA-00263", "1. OBJETIVO", "Descrever o processo.", "2. APLICAÇÃO", "Aplicar na unidade."],
+        )
+
+    def test_pdf_cleaning_removes_lone_underscore_artifact(self):
+        self.assertEqual(limpar_texto_pdf("_\nConteudo valido"), "Conteudo valido")
+
+    def test_pdf_parser_does_not_change_scope_for_anexo_mentioned_in_instruction(self):
+        texto = 'Tabela 2 - Etapas\n1- Alinhar dutos\nCOMO FAZER: Seguir o Anexo "A" do procedimento.'
+
+        blocos = separar_blocos(texto)
+
+        self.assertEqual(blocos[-1]["escopo"], "tabela_2")
 
     def test_pdf_parser_splits_list_items_and_resets_table_scope(self):
         texto = (
@@ -330,11 +430,66 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(blocos[4]["escopo"], "documento_principal")
         self.assertEqual(blocos[5]["escopo"], "documento_principal")
         self.assertEqual(blocos[1]["categoria"], "atividade_tabela_2")
+        self.assertEqual(blocos[1]["contextoTarefa"], {"itemPadrao": "", "subtarefaHTA": "1."})
+        self.assertEqual(blocos[4]["contextoTarefa"], {})
 
     def test_pdf_parser_extracts_hierarchical_item_for_section_titles(self):
         blocos = separar_blocos("3.2 - Atividade\nFluxo das atividades.\n3.2.1 - Responsável\nTécnico de operação.")
 
-        self.assertEqual([bloco["itemPadraoDetectado"] for bloco in blocos], ["3.2", "3.2.1"])
+        titulos = [bloco for bloco in blocos if bloco["tituloEstrutural"]]
+        self.assertEqual([bloco["itemPadraoDetectado"] for bloco in titulos], ["3.2", "3.2.1"])
+
+    def test_pdf_parser_groups_contiguous_informational_list_in_one_block(self):
+        blocos = separar_blocos(
+            "3.2.3 - Recursos necessários\n"
+            "- Lanterna à prova de explosão;\n"
+            "- Rádio e telefone;\n"
+            "- Veículo."
+        )
+
+        self.assertEqual(len(blocos), 2)
+        self.assertTrue(blocos[1]["listaAgrupada"])
+        self.assertEqual(blocos[1]["categoria"], "lista_informativa")
+        self.assertEqual(blocos[1]["texto"].count("\n"), 2)
+
+    def test_operational_table_uses_only_target_matrix_content(self):
+        class TabelaFalsa:
+            def extract(self):
+                return [
+                    ["O QUE FAZER", "EXECUTANTE", "ONDE REGISTRAR"],
+                    ["1- Alinhar dutos", "Técnico de operação", "Boletim"],
+                    ["COMO FAZER: Alinhar.\nPORQUE FAZER: Garantir fluxo.", None, None],
+                ]
+
+        texto = _serializar_tabela(TabelaFalsa())
+
+        self.assertIn("1- Alinhar dutos", texto)
+        self.assertNotIn("Técnico de operação", texto)
+        self.assertNotIn("Boletim\n", texto)
+        self.assertIn("COMO FAZER: Alinhar.\n\nPORQUE FAZER: Garantir fluxo.", texto)
+
+    def test_structural_blocks_bypass_ai_and_keep_title_and_content_separate(self):
+        blocos = separar_blocos("1. OBJETIVO\nDescrever o processo.")
+
+        with patch("app.services.llm_service._converter_prompt") as conversor:
+            titulo = converter_blocos_com_ia([blocos[0]], [], [], {"filename": "teste.pdf"})
+
+        conversor.assert_not_called()
+        self.assertEqual(titulo[0]["descricao"], "OBJETIVO")
+        self.assertEqual(titulo[0]["tipoTarefa"], "Título/Subtítulo")
+
+    def test_document_header_populates_item_column_and_allows_empty_description(self):
+        blocos = separar_blocos(
+            "PE-3UBA-00263 – Versão 03.00 – Padrão Ativo\n\n"
+            "RECEBIMENTO DE GÁS NATURAL"
+        )
+
+        linhas = converter_blocos_com_ia(blocos, [], [], {"filename": "teste.pdf"})
+        normalizadas = normalizar_linhas(linhas)
+
+        self.assertEqual(normalizadas[0]["itemPadrao"], "PE-3UBA-00263-03.00 - RECEBIMENTO DE GÁS NATURAL")
+        self.assertEqual(normalizadas[0]["descricao"], "")
+        self.assertEqual(normalizadas[0]["tipoTarefa"], "Padrão/Anexo")
 
     def test_normalizer_and_csv_numbering(self):
         linhas = normalizar_linhas(

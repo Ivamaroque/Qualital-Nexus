@@ -9,7 +9,7 @@ TipoTarefa = Literal["Padrão/Anexo", "Título/Subtítulo", "Informação", "Exe
 class MatrizLinha(BaseModel):
     ordemBloco: int = Field(ge=1)
     itemPadrao: str = ""
-    descricao: str = Field(min_length=1)
+    descricao: str = ""
     tipoTarefa: TipoTarefa
     subtarefaHTA: str = ""
     descricaoTarefa: str = ""

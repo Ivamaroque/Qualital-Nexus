@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: str = "qwen3:8b"
     ollama_timeout_seconds: int = 300
+    ollama_max_request_seconds: int = 90
+    ollama_max_response_characters: int = 24_000
     extraction_batch_max_chars: int = 40_000
     model_config = SettingsConfigDict(
         # Funciona tanto a partir da raiz quanto de ``backend/``. O arquivo

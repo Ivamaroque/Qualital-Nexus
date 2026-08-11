@@ -61,7 +61,11 @@ def atualizar_processamento(identificador: str, etapa: str, mensagem: str, **det
         logger.info("Processamento id=%s etapa=%s mensagem=%s", identificador, etapa, mensagem)
 
 
-def concluir_processamento(identificador: str) -> None:
+def concluir_processamento(
+    identificador: str,
+    mensagem: str = "CSV gerado e pronto para download.",
+    **detalhes: Any,
+) -> None:
     with _lock:
         processamento = _processamentos.get(identificador)
         if processamento is None:
@@ -70,9 +74,10 @@ def concluir_processamento(identificador: str) -> None:
             {
                 "status": "concluido",
                 "etapa": "concluido",
-                "mensagem": "CSV gerado e pronto para download.",
+                "mensagem": mensagem,
                 "etapas_concluidas": processamento["etapas_totais"],
                 "progresso_percentual": 100,
+                **detalhes,
                 "atualizado_em": _agora(),
             }
         )
