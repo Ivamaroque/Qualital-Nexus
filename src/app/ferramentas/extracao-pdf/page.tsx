@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AppHeader } from "@/components/AppHeader";
 import { FileOrderList } from "@/components/FileOrderList";
@@ -10,6 +10,7 @@ import { useAuthenticatedProfile } from "@/hooks/useAuthenticatedProfile";
 import { isAllowedExtractionFile } from "@/lib/fileValidation";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 import { processarExtracaoPdf } from "@/services/extracaoPdfService";
+import type { ExtracaoPdfProgress } from "@/types/extracaoPdf";
 
 type QueueFile = {
   id: string;
@@ -17,12 +18,34 @@ type QueueFile = {
 };
 
 const processingSteps = [
-  "Enviando arquivos",
+  "Analisando PDFs e calculando o total",
   "Extraindo texto dos PDFs",
-  "Separando conteúdo em blocos",
-  "Consultando exemplos RAG",
+  "Aplicando regras e exemplos do parser",
+  "Gerando linhas com IA",
+  "Consolidando resultados",
   "Gerando CSV"
 ];
+
+const processingStepByStage: Record<string, number> = {
+  envio: 0,
+  preparacao: 0,
+  regras: 2,
+  ia: 3,
+  normalizacao: 4,
+  csv: 5,
+  concluido: processingSteps.length
+};
+
+const ollamaStatusLabels: Record<string, string> = {
+  enviando_lote: "enviando o lote",
+  conectando: "conectando",
+  aguardando_resposta: "aguardando o primeiro trecho",
+  raciocinando: "processando o lote",
+  gerando_resposta: "transmitindo a resposta",
+  resposta_completa: "resposta completa",
+  corrigindo_formato: "corrigindo o formato da resposta",
+  corrigindo_cobertura: "recuperando blocos sem saída"
+};
 
 function createQueueFile(file: File): QueueFile {
   return {
@@ -37,18 +60,11 @@ function ExtracaoPdfContent() {
   const [selectedFileError, setSelectedFileError] = useState<string | null>(null);
   const [processingError, setProcessingError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [activeStepIndex, setActiveStepIndex] = useState(0);
+  const [processingProgress, setProcessingProgress] = useState<ExtracaoPdfProgress | null>(null);
   const [resultFilename, setResultFilename] = useState<string | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
-  const timeoutsRef = useRef<number[]>([]);
 
   const canProcess = files.length > 0 && !isProcessing;
-
-  useEffect(() => {
-    return () => {
-      timeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
-    };
-  }, []);
 
   useEffect(() => {
     if (!resultUrl) {
@@ -124,16 +140,23 @@ function ExtracaoPdfContent() {
     setProcessingError(null);
     setSelectedFileError(null);
     setIsProcessing(true);
-    setActiveStepIndex(0);
+    setProcessingProgress({
+      status: "processando",
+      etapa: "envio",
+      mensagem: "Preparando o envio dos arquivos.",
+      arquivo_atual: 0,
+      total_arquivos: files.length,
+      lote_atual: 0,
+      total_lotes: 0,
+      etapas_concluidas: 0,
+      etapas_totais: 0,
+      progresso_percentual: 0,
+      ia_status: "",
+      ia_trechos_recebidos: 0,
+      ia_caracteres_recebidos: 0,
+      atualizado_em: new Date().toISOString()
+    });
     resetResultState();
-
-    const stepDurations = [0, 850, 1650, 2550, 3450];
-    timeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
-    timeoutsRef.current = stepDurations.map((delay, index) =>
-      window.setTimeout(() => {
-        setActiveStepIndex(index);
-      }, delay)
-    );
 
     try {
       const supabase = getSupabaseBrowserClient();
@@ -145,18 +168,53 @@ function ExtracaoPdfContent() {
       }
 
       const result = await processarExtracaoPdf(files.map((entry) => entry.file), {
-        accessToken
+        accessToken,
+        onProgress: setProcessingProgress
       });
       const url = URL.createObjectURL(result.blob);
       setResultFilename(result.filename);
       setResultUrl(url);
-      setActiveStepIndex(processingSteps.length);
+      setProcessingProgress((current) => ({
+        ...(current ?? {
+          arquivo_atual: files.length,
+          total_arquivos: files.length,
+          lote_atual: 0,
+          total_lotes: 0,
+          etapas_concluidas: 0,
+          etapas_totais: 0,
+          progresso_percentual: 100,
+          ia_status: "",
+          ia_trechos_recebidos: 0,
+          ia_caracteres_recebidos: 0,
+          atualizado_em: new Date().toISOString()
+        }),
+        status: "concluido",
+        etapa: "concluido",
+        mensagem: "CSV gerado e pronto para download."
+      }));
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível processar os arquivos agora.";
+      setProcessingProgress((current) => ({
+        ...(current ?? {
+          arquivo_atual: 0,
+          total_arquivos: files.length,
+          lote_atual: 0,
+          total_lotes: 0,
+          etapas_concluidas: 0,
+          etapas_totais: 0,
+          progresso_percentual: 0,
+          ia_status: "",
+          ia_trechos_recebidos: 0,
+          ia_caracteres_recebidos: 0,
+          atualizado_em: new Date().toISOString()
+        }),
+        status: "erro",
+        etapa: "erro",
+        mensagem: message
+      }));
       setProcessingError(error instanceof Error ? error.message : "Não foi possível processar os arquivos agora.");
     } finally {
       setIsProcessing(false);
-      timeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
-      timeoutsRef.current = [];
     }
   }
 
@@ -267,7 +325,59 @@ function ExtracaoPdfContent() {
           </div>
 
           <div className="stack stack--lg">
-            <ProcessingSteps activeIndex={activeStepIndex} isProcessing={isProcessing} steps={processingSteps} />
+            <ProcessingSteps
+              activeIndex={processingStepByStage[processingProgress?.etapa ?? "envio"] ?? 0}
+              isProcessing={isProcessing}
+              steps={processingSteps}
+            />
+
+            <section className="surface card card--compact stack" aria-live="polite" aria-label="Console de depuração">
+              <div className="row row--between">
+                <div>
+                  <p className="eyebrow">Console de depuração</p>
+                  <h3 className="title" style={{ fontSize: "1.1rem", marginTop: 6 }}>
+                    Status em tempo real
+                  </h3>
+                </div>
+                <span className="badge">{processingProgress?.status ?? "Aguardando"}</span>
+              </div>
+              <div className={`debug-console ${processingProgress?.status === "erro" ? "debug-console--error" : ""}`}>
+                <p>{processingProgress?.mensagem ?? "O status do processamento aparecerá aqui após o envio."}</p>
+                {processingProgress?.ia_status ? (
+                  <p>
+                    Ollama: {ollamaStatusLabels[processingProgress.ia_status] ?? processingProgress.ia_status}
+                    {processingProgress.ia_trechos_recebidos > 0
+                      ? ` · ${processingProgress.ia_trechos_recebidos} trechos recebidos (${processingProgress.ia_caracteres_recebidos} caracteres)`
+                      : ""}
+                  </p>
+                ) : null}
+                {processingProgress?.etapas_totais ? (
+                  <>
+                    <p>
+                      Progresso real: {processingProgress.etapas_concluidas} de {processingProgress.etapas_totais} etapas concluídas
+                      ({processingProgress.progresso_percentual}%).
+                    </p>
+                    <progress
+                      className="processing-progress"
+                      max={processingProgress.etapas_totais}
+                      value={processingProgress.etapas_concluidas}
+                    >
+                      {processingProgress.progresso_percentual}%
+                    </progress>
+                  </>
+                ) : processingProgress ? (
+                  <p>Calculando o total real das etapas antes de iniciar a IA.</p>
+                ) : null}
+                {processingProgress && processingProgress.total_arquivos > 0 ? (
+                  <p>
+                    Arquivo {processingProgress.arquivo_atual || 1} de {processingProgress.total_arquivos}
+                    {processingProgress.total_lotes > 0
+                      ? ` · lote ${processingProgress.lote_atual || 1} de ${processingProgress.total_lotes}`
+                      : ""}
+                  </p>
+                ) : null}
+              </div>
+            </section>
 
             <section className="surface card card--compact stack">
               <p className="eyebrow">Resultado</p>

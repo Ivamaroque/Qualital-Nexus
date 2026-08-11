@@ -328,6 +328,36 @@ button {
   padding: 18px;
 }
 
+.debug-console {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  color: #d7e5ff;
+  background: #14233d;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.debug-console p {
+  margin: 0;
+}
+
+.processing-progress {
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  accent-color: #62d5c0;
+}
+
+.debug-console--error {
+  color: #ffd8d3;
+  background: #5d1d1b;
+}
+
 .toolbar {
   display: flex;
   justify-content: space-between;

@@ -29,8 +29,6 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3:8b"
     ollama_timeout_seconds: int = 300
     extraction_batch_max_chars: int = 40_000
-    rag_examples_limit: int = 2
-
     model_config = SettingsConfigDict(
         # Funciona tanto a partir da raiz quanto de ``backend/``. O arquivo
         # dentro de backend, se existir, possui precedência.

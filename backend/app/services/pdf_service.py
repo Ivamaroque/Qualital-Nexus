@@ -7,12 +7,20 @@ from app.utils.text_utils import normalize_whitespace, normalized_for_match
 
 _PAGE_RE = re.compile(r"^página\s+\d+\s+de\s+\d+\s*$", re.IGNORECASE)
 _UNDERSCORE_RE = re.compile(r"^[_\-]{3,}$")
-_SECTION_RE = re.compile(r"^\d+(?:\.\d+){0,4}\.?\s+.+")
+_SECTION_RE = re.compile(r"^(?:\d+\.|\d+\.\d+(?:\.\d+){0,6}\.?)\s*(?:[-–—]\s*)?.+")
+_ITEM_PADRAO_RE = re.compile(r"^\s*(\d+\.(?:\d+\.)*|\d+(?:\.\d+)+)(?=\s|[-–—]|$)")
 _TABLE_RE = re.compile(r"^(?:tabela\s*\d+|quadro\s*\d+|anexo\s+[a-z])\b", re.IGNORECASE)
+_LIST_ITEM_RE = re.compile(r"^(?:[•·▪◦*-]|\d+[.)-])\s+\S+")
+_DOCUMENT_CODE_RE = re.compile(r"^(?:PE|PG|PR|PP)-[A-Z0-9]+-\d{5}\b", re.IGNORECASE)
+_TABLE_HEADER_RE = re.compile(
+    r"^(?:O QUE FAZER|EXECUTANTE|ONDE REGISTRAR|ATIVIDADE|ASPECTO/PERIGO|IMPACTO/RISCO|AÇÕES DE CONTROLE)$",
+    re.IGNORECASE,
+)
 _TECHNICAL_MARKER_RE = re.compile(
     r"^(?:objetivo|aplicação|descrição|como fazer|porque fazer|registros|definições|recursos necessários|itens críticos)\b",
     re.IGNORECASE,
 )
+_MAX_BLOCK_CHARACTERS = 6_000
 
 
 def extrair_texto_pdf(pdf_bytes: bytes) -> str:
@@ -39,6 +47,11 @@ def limpar_texto_pdf(texto: str) -> str:
 
 def detectar_categoria(texto: str) -> str:
     normalizado = normalized_for_match(texto)
+    primeira_linha = texto.splitlines()[0] if texto else ""
+    if _DOCUMENT_CODE_RE.match(primeira_linha):
+        return "padrao_documento"
+    if _TABLE_HEADER_RE.match(primeira_linha):
+        return "cabecalho_tabela"
     categorias = (
         ("objetivo", "objetivo"),
         ("aplicacao", "aplicação"),
@@ -90,21 +103,35 @@ def extrair_palavras_chave(texto: str) -> list[str]:
     return [termo for termo in termos if normalized_for_match(termo) in normalizado]
 
 
+def extrair_item_padrao(texto: str) -> str:
+    primeira_linha = texto.splitlines()[0] if texto else ""
+    resultado = _ITEM_PADRAO_RE.match(primeira_linha)
+    return resultado.group(1) if resultado else ""
+
+
 def separar_blocos(texto: str) -> list[dict]:
-    """Agrupa seções e marcadores técnicos sem alterar a ordem do documento."""
+    """Separa segmentos técnicos pequenos, ordenados e adequados à conversão pela IA."""
     blocos: list[list[str]] = []
     atual: list[str] = []
     for linha in texto.splitlines():
-        inicio_de_bloco = bool(_SECTION_RE.match(linha) or _TABLE_RE.match(linha) or _TECHNICAL_MARKER_RE.match(linha))
+        inicio_de_bloco = bool(
+            _SECTION_RE.match(linha)
+            or _TABLE_RE.match(linha)
+            or _LIST_ITEM_RE.match(linha)
+            or _TECHNICAL_MARKER_RE.match(linha)
+        )
         if inicio_de_bloco and atual:
             blocos.append(atual)
             atual = []
         atual.append(linha)
+        if sum(len(trecho) + 1 for trecho in atual) >= _MAX_BLOCK_CHARACTERS:
+            blocos.append(atual)
+            atual = []
     if atual:
         blocos.append(atual)
 
     resultado: list[dict] = []
-    escopo_contextual = "geral"
+    escopo_contextual = "documento_principal"
     escopos_explicitos = {"anexo", "anexo_a", "anexo_b", "tabela_2", "tabela_5", "tabelas_tecnicas"}
     for ordem, linhas in enumerate(blocos, start=1):
         bloco_texto = "\n".join(linhas).strip()
@@ -113,12 +140,21 @@ def separar_blocos(texto: str) -> list[dict]:
         escopo_detectado = detectar_escopo(bloco_texto)
         if escopo_detectado in escopos_explicitos:
             escopo_contextual = escopo_detectado
+        elif escopo_detectado == "documento_principal" and not escopo_contextual.startswith("anexo"):
+            escopo_contextual = escopo_detectado
+        categoria = detectar_categoria(bloco_texto)
+        if categoria == "geral" and _LIST_ITEM_RE.match(linhas[0]):
+            if escopo_contextual == "tabela_2":
+                categoria = "atividade_tabela_2"
+            elif escopo_contextual == "tabela_5":
+                categoria = "atividade_anomalia"
         resultado.append(
             {
                 "ordem": ordem,
                 "texto": bloco_texto,
-                "categoria": detectar_categoria(bloco_texto),
-                "escopo": escopo_contextual if escopo_contextual != "geral" else escopo_detectado,
+                "itemPadraoDetectado": extrair_item_padrao(bloco_texto),
+                "categoria": categoria,
+                "escopo": escopo_contextual,
                 "palavras_chave": extrair_palavras_chave(bloco_texto),
             }
         )
