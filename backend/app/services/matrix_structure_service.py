@@ -77,9 +77,120 @@ def _consolidar_continuacoes_informativas(linhas: list[dict[str, Any]]) -> list[
     return consolidadas
 
 
+def _sufixo_local_do_grupo(item: str, grupo: str) -> str:
+    correspondencia = re.fullmatch(
+        rf"{re.escape(grupo.rstrip('.'))}\.?(?:\((\d+(?:\.\d+)*)\.?\))",
+        item.rstrip("."),
+    )
+    if correspondencia:
+        return correspondencia.group(1)
+    grupo_sem_ponto = grupo.rstrip(".")
+    if item.startswith(f"{grupo_sem_ponto}."):
+        return item.removeprefix(f"{grupo_sem_ponto}.").rstrip(".")
+    return ""
+
+
+def _aplicar_hierarquia_do_anexo(
+    blocos_por_ordem: dict[int, dict[str, Any]],
+    resultado: list[dict[str, Any]],
+    titulos_por_item: dict[str, dict[str, Any]],
+    raiz_inicial: int,
+) -> None:
+    """Mantém todo o anexo em uma raiz HTA e respeita listas locais do Word."""
+    ordens_com_execucao = {
+        int(linha["ordemBloco"])
+        for linha in resultado
+        if linha.get("tipoTarefa") == "Execução" and str(linha.get("ordemBloco") or "").isdigit()
+    }
+    grupos: list[str] = []
+    for ordem, bloco in blocos_por_ordem.items():
+        if ordem not in ordens_com_execucao or not str(bloco.get("escopo") or "").startswith("anexo_"):
+            continue
+        grupo = _item_para_hierarquia(bloco.get("secaoContextual"))
+        if grupo and grupo not in grupos:
+            grupos.append(grupo)
+    if not grupos:
+        return
+
+    prefixos: dict[str, str] = {}
+    contador_primario = 0
+    contador_posterior = 1
+    fase_primaria = True
+    ultimo_prefixo_primario = ""
+    bases_primarias: dict[str, str] = {}
+
+    for grupo in grupos:
+        primeiro = grupo.split(".", maxsplit=1)[0]
+        if fase_primaria and primeiro == "2":
+            fase_primaria = False
+        if fase_primaria:
+            if primeiro == "1":
+                ancestrais = [
+                    item
+                    for item in titulos_por_item
+                    if len(item.split(".")) >= 3 and grupo.startswith(f"{item}.")
+                ]
+                base = max(ancestrais, key=len, default=grupo)
+                if base not in bases_primarias:
+                    contador_primario += 1
+                    bases_primarias[base] = f"{raiz_inicial}.1.{contador_primario}"
+                prefixo_base = bases_primarias[base]
+                sufixo = grupo.removeprefix(base).lstrip(".")
+                prefixos[grupo] = f"{prefixo_base}.{sufixo}" if sufixo else prefixo_base
+                ultimo_prefixo_primario = prefixos[grupo]
+            elif re.fullmatch(r"\d+[A-Z]", grupo, re.IGNORECASE):
+                contador_primario += 1
+                ultimo_prefixo_primario = f"{raiz_inicial}.1.{contador_primario}"
+                prefixos[grupo] = ultimo_prefixo_primario
+            elif ultimo_prefixo_primario:
+                prefixos[grupo] = ultimo_prefixo_primario
+        else:
+            contador_posterior += 1
+            prefixos[grupo] = f"{raiz_inicial}.{contador_posterior}"
+
+    contadores: defaultdict[str, int] = defaultdict(int)
+    htas_usadas: set[str] = set()
+    for linha in resultado:
+        ordem = linha.get("ordemBloco")
+        bloco = blocos_por_ordem.get(int(ordem)) if str(ordem or "").isdigit() else None
+        if not bloco or not str(bloco.get("escopo") or "").startswith("anexo_"):
+            continue
+        grupo = _item_para_hierarquia(bloco.get("secaoContextual"))
+        prefixo = prefixos.get(grupo)
+        if not prefixo:
+            continue
+        item = _item_para_hierarquia(linha.get("itemPadrao"))
+        sufixo = _sufixo_local_do_grupo(item, grupo)
+        if linha.get("tipoTarefa") == "Título/Subtítulo":
+            hta = f"{prefixo}.{sufixo}." if sufixo else f"{prefixo}."
+            linha["subtarefaHTA"] = re.sub(r"\.{2,}", ".", hta)
+            linha["descricaoTarefa"] = _descricao_tarefa_com_item(
+                str(linha.get("descricao") or ""),
+                str(linha.get("itemPadrao") or ""),
+            )
+            continue
+        if linha.get("tipoTarefa") != "Execução":
+            continue
+        if sufixo:
+            primeiro_nivel = sufixo.split(".", maxsplit=1)[0]
+            if primeiro_nivel.isdigit():
+                contadores[grupo] = max(contadores[grupo], int(primeiro_nivel))
+        candidato = re.sub(r"\.{2,}", ".", f"{prefixo}.{sufixo}.") if sufixo else ""
+        if not sufixo or candidato in htas_usadas:
+            contadores[grupo] += 1
+            sufixo = str(contadores[grupo])
+        linha["subtarefaHTA"] = re.sub(r"\.{2,}", ".", f"{prefixo}.{sufixo}.")
+        htas_usadas.add(linha["subtarefaHTA"])
+        linha["descricaoTarefa"] = _descricao_tarefa_com_item(
+            str(linha.get("descricaoTarefa") or ""),
+            str(linha.get("itemPadrao") or ""),
+        )
+
+
 def consolidar_hierarquia_tarefas(
     blocos: list[dict[str, Any]],
     linhas: list[dict[str, Any]],
+    raiz_inicial: int = 1,
 ) -> list[dict[str, Any]]:
     """Atribui HTA numérica global depois que todos os lotes do arquivo foram reunidos."""
     blocos_por_ordem = {int(bloco["ordem"]): bloco for bloco in blocos}
@@ -90,13 +201,20 @@ def consolidar_hierarquia_tarefas(
         if item and linha.get("tipoTarefa") == "Título/Subtítulo":
             titulos_por_item[item] = linha
 
+    _aplicar_hierarquia_do_anexo(
+        blocos_por_ordem,
+        resultado,
+        titulos_por_item,
+        raiz_inicial,
+    )
+
     raizes_existentes = [
         int(str(linha.get("subtarefaHTA")).strip().rstrip("."))
         for linha in resultado
         if linha.get("tipoTarefa") == "Título/Subtítulo"
         and re.fullmatch(r"\d+\.", str(linha.get("subtarefaHTA") or "").strip())
     ]
-    proxima_raiz = max(raizes_existentes, default=0) + 1
+    proxima_raiz = max([max(1, raiz_inicial) - 1, *raizes_existentes]) + 1
     numero_raiz: dict[str, int] = {}
     numero_subsecao: dict[tuple[str, str], int] = {}
     contador_subsecao: defaultdict[str, int] = defaultdict(int)

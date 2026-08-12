@@ -49,6 +49,16 @@ def _identificador_processamento(request: Request) -> str | None:
     return identificador if _PROCESSING_ID_PATTERN.fullmatch(identificador) else None
 
 
+def _proxima_raiz_hta(linhas: list[dict[str, Any]]) -> int:
+    raizes = []
+    for linha in linhas:
+        valor = str(linha.get("subtarefaHTA") or "").strip()
+        correspondencia = re.match(r"^(\d+)\.", valor)
+        if correspondencia:
+            raizes.append(int(correspondencia.group(1)))
+    return max(raizes, default=0) + 1
+
+
 def _agrupar_blocos(
     blocos: list[dict[str, Any]], maximo_caracteres: int, maximo_blocos: int = _MAXIMO_BLOCOS_POR_LOTE
 ) -> list[list[dict[str, Any]]]:
@@ -310,7 +320,13 @@ async def _processar_arquivos(
                     )
                     debug["exemplos_parser_por_bloco"].append({**identificador, "quantidade": len(exemplos_parser)})
                     debug["regras_usadas_por_bloco"].append({**identificador, "regras": regras_bloco})
-        linhas_arquivo = await run_in_threadpool(consolidar_hierarquia_tarefas, blocos, linhas_arquivo)
+        raiz_inicial = _proxima_raiz_hta(acumuladas)
+        linhas_arquivo = await run_in_threadpool(
+            consolidar_hierarquia_tarefas,
+            blocos,
+            linhas_arquivo,
+            raiz_inicial,
+        )
         linhas_normalizadas_arquivo = normalizar_linhas(linhas_arquivo)
         acumuladas.extend(linhas_normalizadas_arquivo)
         if incluir_debug:

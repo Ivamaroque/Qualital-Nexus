@@ -97,6 +97,9 @@ def _criar_prompt(
             "categoria": bloco.get("categoria", "geral"),
             "escopo": bloco.get("escopo", "documento_principal"),
             "contextoTarefa": bloco.get("contextoTarefa", {}),
+            "secaoContextual": bloco.get("secaoContextual", ""),
+            "tituloEstrutural": bool(bloco.get("tituloEstrutural")),
+            "listaAgrupada": bool(bloco.get("listaAgrupada")),
             "tipoTarefaSugerido": (bloco.get("orientacao_parser") or {}).get("tipoTarefa"),
         }
         for bloco in blocos
@@ -108,16 +111,19 @@ def _criar_prompt(
             "Converta todos os blocos na ordem recebida. Cada linha deve informar ordemBloco igual ao campo ordem "
             "do bloco de origem. Um bloco pode gerar várias linhas, mas nenhum bloco pode ficar sem linha. "
             "A orientacao_parser indica a regra que correspondeu ao trecho; siga-a quando existir. Use itemPadraoDetectado "
-            "somente na linha de título da seção, removendo a numeração do início da descricao; para linhas de conteúdo "
+            "exatamente como recebido, inclusive prefixos e pontos finais; nunca renumere itens. Use-o somente na linha de "
+            "título da seção, removendo apenas a numeração do início da descricao; para linhas de conteúdo "
             "da mesma seção deixe itemPadrao vazio. Para cada ação explícita, gere uma linha Execução, repita em descricao "
-            "o texto integral do bloco, use descricaoTarefa no infinitivo e deixe subtarefaHTA vazio: a hierarquia numérica "
+            "o texto integral do bloco sem resumir nem parafrasear, use descricaoTarefa no infinitivo e deixe subtarefaHTA "
+            "vazio: a hierarquia numérica "
             "será atribuída na consolidação global. Nos demais tipos, deixe subtarefaHTA e descricaoTarefa vazios."
         ),
         "orientacoes_parser": orientacoes_parser,
         "exemplos_parser": exemplos_compactos,
         "requisitos_conteudo": (
             "Cada texto de saída precisa ser comprovável pelo bloco de origem. Nunca gere nomes de regras, "
-            "categorias, contratos, metadados ou exemplos do parser. Não repita frases. Em tabela operacional, "
+            "categorias, contratos, metadados, rótulos isolados de telas ou exemplos do parser. Não repita frases. "
+            "Uma descrição informativa deve preservar literalmente o conteúdo de origem. Em tabela operacional, "
             "a atividade é Título/Subtítulo, COMO FAZER é Execução e PORQUE FAZER é Informação. Só use Padrão/Anexo "
             "quando a categoria do bloco indicar um documento ou anexo real; referências a códigos PE dentro de frases "
             "continuam como Informação ou Execução."
@@ -556,7 +562,7 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
                 tipoTarefa="Título/Subtítulo",
             )
         ]
-    if categoria == "cabecalho_documento_repetido":
+    if categoria in {"cabecalho_documento_repetido", "fragmento_interface"}:
         return [MatrizLinha(ordemBloco=bloco["ordem"], descricao="", tipoTarefa="Ignorar")]
     if (
         (
@@ -568,11 +574,20 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
         and linhas_fonte
     ):
         item_padrao = str(bloco.get("itemPadraoDetectado") or "")
-        descricao_titulo = re.sub(
-            r"^\s*\d+(?:\.\d+)*\.?\s*",
-            "",
-            linhas_fonte[0],
-        ).strip()
+        descricao_titulo = linhas_fonte[0]
+        if re.match(r"^\s*\d+[A-Z]\s*[-–—]", descricao_titulo, re.IGNORECASE):
+            descricao_titulo = re.sub(
+                r"^\s*\d+[A-Z]\s*[-–—]\s*",
+                "",
+                descricao_titulo,
+                flags=re.IGNORECASE,
+            ).strip()
+        else:
+            descricao_titulo = re.sub(
+                r"^\s*\d+(?:\.\d+)*\.?\s*",
+                "",
+                descricao_titulo,
+            ).strip()
         linhas = [
             MatrizLinha(
                 ordemBloco=bloco["ordem"],
@@ -636,7 +651,11 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
     if categoria == "instrucao_operacional":
         descricao = _texto_fonte_sem_item(bloco)
         item_padrao = str(bloco.get("itemPadraoDetectado") or bloco.get("secaoContextual") or "")
-        acoes = _extrair_acoes_explicitas(descricao)
+        acoes = (
+            [_normalizar_acao_para_infinitivo(descricao)]
+            if bloco.get("acaoUnica")
+            else _extrair_acoes_explicitas(descricao)
+        )
         if not acoes:
             return [
                 MatrizLinha(
@@ -707,6 +726,7 @@ def _bloco_tem_contrato_deterministico(bloco: dict[str, Any]) -> bool:
             "anexo_documento",
             "anexo_cabecalho_repetido",
             "cabecalho_documento_repetido",
+            "fragmento_interface",
             "item_numerado_anexo",
             "instrucao_operacional",
         }
@@ -720,18 +740,33 @@ def _normalizar_texto_para_fundamentacao(valor: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", texto.lower()))
 
 
-def _linha_e_fundamentada_no_bloco(linha: MatrizLinha, bloco: dict[str, Any]) -> bool:
-    descricao = _normalizar_texto_para_fundamentacao(linha.descricao)
-    fonte = _normalizar_texto_para_fundamentacao(str(bloco.get("texto") or ""))
-    if not descricao or not fonte:
+def _texto_e_fundamentado_no_bloco(valor: str, fonte: str, limite: float = 0.5) -> bool:
+    texto = _normalizar_texto_para_fundamentacao(valor)
+    fonte_normalizada = _normalizar_texto_para_fundamentacao(fonte)
+    if not texto or not fonte_normalizada:
         return False
-    if descricao in fonte:
+    if texto in fonte_normalizada:
         return True
-    palavras_descricao = {palavra for palavra in descricao.split() if len(palavra) >= 4}
-    palavras_relevantes = palavras_descricao - _PALAVRAS_GENERICAS
+    palavras_texto = {palavra for palavra in texto.split() if len(palavra) >= 4}
+    palavras_relevantes = palavras_texto - _PALAVRAS_GENERICAS
     if not palavras_relevantes:
         return False
-    return len(palavras_relevantes & set(fonte.split())) / len(palavras_relevantes) >= 0.5
+    radicais_texto = {palavra[:5] for palavra in palavras_relevantes}
+    radicais_fonte = {
+        palavra[:5]
+        for palavra in fonte_normalizada.split()
+        if len(palavra) >= 4 and palavra not in _PALAVRAS_GENERICAS
+    }
+    return len(radicais_texto & radicais_fonte) / len(radicais_texto) >= limite
+
+
+def _linha_e_fundamentada_no_bloco(linha: MatrizLinha, bloco: dict[str, Any]) -> bool:
+    fonte = str(bloco.get("texto") or "")
+    if not _texto_e_fundamentado_no_bloco(linha.descricao, fonte):
+        return False
+    if linha.tipoTarefa != "Execução" or not linha.descricaoTarefa.strip():
+        return True
+    return _texto_e_fundamentado_no_bloco(linha.descricaoTarefa, fonte, limite=0.45)
 
 
 def _remover_linhas_nao_fundamentadas(blocos: list[dict[str, Any]], matriz: MatrizOutput) -> MatrizOutput:

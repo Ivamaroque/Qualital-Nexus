@@ -47,6 +47,7 @@ from app.routers.extracao_pdf import (
     _agrupar_blocos,
     _exemplos_parser_do_lote,
     _mensagem_progresso_ollama,
+    _proxima_raiz_hta,
     _processar_arquivos,
 )
 
@@ -324,6 +325,25 @@ class MatrizServicesTest(unittest.TestCase):
 
         self.assertEqual(resultado.linhas, [])
 
+    def test_parser_discards_execution_task_invented_by_the_llm(self):
+        matriz = MatrizOutput(
+            linhas=[
+                MatrizLinha(
+                    ordemBloco=1,
+                    descricao="Abra a tampa do registrador.",
+                    tipoTarefa="Execução",
+                    descricaoTarefa="Enviar relatório por e-mail.",
+                )
+            ]
+        )
+
+        resultado = _remover_linhas_nao_fundamentadas(
+            [{"ordem": 1, "texto": "Abra a tampa do registrador."}],
+            matriz,
+        )
+
+        self.assertEqual(resultado.linhas, [])
+
     def test_ia_recovers_missing_global_orders_from_a_local_retry_response(self):
         blocos = [{"ordem": ordem, "texto": f"Bloco {ordem}"} for ordem in range(9, 17)]
         primeira_resposta = MatrizOutput(
@@ -594,6 +614,105 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertTrue(any(linha.descricaoTarefa.startswith("Abrir a tampa") for linha in execucoes))
         self.assertNotIn("Propriedade da Petrobras", "\n".join(bloco["texto"] for bloco in blocos))
         self.assertNotIn("EMED-099", "\n".join(bloco["texto"] for bloco in blocos))
+
+    def test_annex_preserves_item_punctuation_and_discards_interface_suffix(self):
+        blocos = separar_blocos(
+            "ANEXO B\n"
+            "1.1. – Sistema de medição.\n"
+            "ANEXO B\n"
+            "1.1.1. - Abra a tampa.\n"
+            "PE-3UBA-00263 – Versão 03.00 – Padrão Ativo\n\n"
+            "USER\n\nLIST\n\nFLOW COMP\n\n1 2 3\n\nO r i f i c e D i a m e t e r"
+        )
+
+        titulo = next(bloco for bloco in blocos if bloco["itemPadraoDetectado"] == "Anexo B - 1.1.")
+        sufixo = blocos[-5:]
+
+        self.assertEqual(titulo["itemPadraoDetectado"], "Anexo B - 1.1.")
+        self.assertTrue(all(bloco["categoria"] == "fragmento_interface" for bloco in sufixo))
+
+    def test_hierarchy_can_continue_after_roots_from_previous_documents(self):
+        blocos = separar_blocos(
+            "ANEXO B\n"
+            "1.1.1 - Procedimento de configuração.\n"
+            "ANEXO B\n"
+            "1.1 - Sistema\n"
+            "1.1.1 - Configuração\n"
+            "1.1.1.1 - Abra a tampa e aperte ENTER.\n"
+            "1.1.1.2 - Feche a tampa."
+        )
+        linhas = [
+            linha.model_dump()
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+
+        consolidadas = consolidar_hierarquia_tarefas(blocos, linhas, raiz_inicial=12)
+        execucoes = [linha for linha in consolidadas if linha["tipoTarefa"] == "Execução"]
+
+        self.assertEqual(
+            [linha["subtarefaHTA"] for linha in execucoes],
+            ["12.1.1.1.", "12.1.1.2.", "12.1.1.3."],
+        )
+        self.assertEqual(_proxima_raiz_hta([{"subtarefaHTA": "11.3.2."}]), 12)
+
+    def test_annex_rebuilds_word_local_numbering_inside_each_procedure(self):
+        blocos = separar_blocos(
+            "ANEXO B\n"
+            "2.2.2. CONTROLADOR E INDICADOR DE NÍVEL\n"
+            "Procedimento.\n"
+            "1. Escolha a tela desejada.\n"
+            "2. Clique no controlador.\n"
+            "ANEXO B\n"
+            "3. VERIFICAÇÃO E ALTERAÇÃO DOS SETS DAS XV’s\n"
+            "Procedimento.\n"
+            "1. Escolha no Supervisório a tela correspondente.\n"
+            "2. Em seguida, clique no link da XV."
+        )
+
+        itens = {
+            bloco["texto"]: bloco["itemPadraoDetectado"]
+            for bloco in blocos
+            if bloco["itemPadraoDetectado"]
+        }
+
+        self.assertEqual(itens["1. Escolha a tela desejada."], "Anexo B - 2.2.2.(1.)")
+        self.assertEqual(itens["2. Clique no controlador."], "Anexo B - 2.2.2.(2.)")
+        self.assertEqual(
+            itens["1. Escolha no Supervisório a tela correspondente."],
+            "Anexo B - 3.(1.)",
+        )
+        self.assertEqual(itens["2. Em seguida, clique no link da XV."], "Anexo B - 3.(2.)")
+
+    def test_annex_alphanumeric_group_keeps_items_and_hta_in_the_same_branch(self):
+        blocos = separar_blocos(
+            "ANEXO B\n"
+            "1.1.1 - Procedimento principal\n"
+            "1.1.1.1 - Abra a tampa.\n"
+            "5B – Recolocação da placa\n"
+            "1. Baixar o Porta-Placas.\n"
+            "2. Observar as condições da junta."
+        )
+        linhas = [
+            linha.model_dump()
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+
+        consolidadas = consolidar_hierarquia_tarefas(blocos, linhas, raiz_inicial=12)
+        grupo = [linha for linha in consolidadas if str(linha["itemPadrao"]).startswith("Anexo B - 5B")]
+
+        self.assertEqual([linha["itemPadrao"] for linha in grupo], [
+            "Anexo B - 5B",
+            "Anexo B - 5B(1.)",
+            "Anexo B - 5B(2.)",
+        ])
+        self.assertEqual([linha["subtarefaHTA"] for linha in grupo], [
+            "12.1.2.",
+            "12.1.2.1.",
+            "12.1.2.2.",
+        ])
+        self.assertEqual(grupo[0]["descricao"], "Recolocação da placa")
 
     def test_parser_marks_only_explicit_operational_paragraphs_for_ai(self):
         blocos = separar_blocos(
