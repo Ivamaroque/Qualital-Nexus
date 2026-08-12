@@ -13,6 +13,7 @@ _TABLE_RE = re.compile(r"^(?:tabela\s*\d+|quadro\s*\d+|anexo\s+[a-z])\b", re.IGN
 _LIST_ITEM_RE = re.compile(r"^(?:[•·▪◦*-]|\d+[.)-]|\d+\s*[-–—])\s+\S+")
 _PROCESS_REFERENCE_RE = re.compile(r"^N\d+\s*[-–—]\s+", re.IGNORECASE)
 _DOCUMENT_CODE_RE = re.compile(r"^(?:PE|PG|PR|PP)-[A-Z0-9]+-\d{5}\b", re.IGNORECASE)
+_ANEXO_DOCUMENTO_RE = re.compile(r"^ANEXO\s+([A-Z])$", re.IGNORECASE)
 _TABLE_HEADER_RE = re.compile(
     r"^(?:O QUE FAZER|EXECUTANTE|ONDE REGISTRAR|ATIVIDADE|ASPECTO/PERIGO|IMPACTO/RISCO|AÇÕES DE CONTROLE)$",
     re.IGNORECASE,
@@ -23,6 +24,29 @@ _TECHNICAL_MARKER_RE = re.compile(
 )
 _MAX_BLOCK_CHARACTERS = 6_000
 _MAX_GROUPED_TABLE_CHARACTERS = 3_000
+_NOISE_LINE_RE = re.compile(
+    r"^(?:"
+    r"PROPRIEDADE\s+DA\s+PETROBRAS\s+PAGE\s+\d+\s+DE\s+NUMPAGES(?:\s+\d+)?"
+    r"|LIST\s+\d+\s+\d+\s+OF\s+\d+"
+    r"|SHAPE\s+\\\*\s+MERGEFORMAT"
+    r"|TTONT-KM3(?:\s*\([^)]*\))?\s*[0-9,\.]*"
+    r"|EMED-\d+\b.*"
+    r")$",
+    re.IGNORECASE,
+)
+_NUMBERED_ITEM_RE = re.compile(r"^\s*(\d+(?:\.\d+)*\.?)\s*(?:[-–—]\s*)?(.*)$")
+_ACTION_IMPERATIVE_RE = re.compile(
+    r"^(?:abra|abrir|acione|acionar|aperte|apertar|baixe|baixar|clique|clicar|digite|digitar|"
+    r"escolha|escolher|feche|fechar|informe|informar|inspecione|inspecionar|levante|levantar|"
+    r"observe|observar|recoloque|recolocar|retorne|retornar|retire|retirar|suba|subir|teste|testar|"
+    r"utilize|utilizar|verifique|verificar|varie|variar)\b",
+    re.IGNORECASE,
+)
+_ANEXO_OPERATIONAL_HEADING_RE = re.compile(
+    r"^\s*\d+(?:\.\d+)*\.?\s*(?:[-–—]\s*)?"
+    r"(?:ACOMPANHAR|CHECAR|INSPECIONAR|VERIFICAÇÃO|VERIFICACAO)\b",
+    re.IGNORECASE,
+)
 _SUMARIO_TITULOS = {"OBJETIVO", "APLICAÇÃO", "DESCRIÇÃO", "REGISTROS", "DEFINIÇÕES"}
 _ATIVIDADE_TABELA_RE = re.compile(r"^\s*(\d+)\s*[-–—.]\s*(.+)")
 _NUMBERED_LIST_ITEM_RE = re.compile(r"^\s*\d+\s*[-–—]\s+\S+")
@@ -172,13 +196,16 @@ def limpar_texto_pdf(texto: str) -> str:
     linhas_limpas: list[str] = []
     for linha in texto.splitlines():
         linha = normalize_whitespace(linha)
+        linha = re.sub(r"(?<=\d)\.\.(?=\d)", ".", linha)
         linha = _PAGE_RE.sub("", linha).strip()
         normalizada = normalized_for_match(linha)
         if not linha:
             if linhas_limpas and linhas_limpas[-1] != "":
                 linhas_limpas.append("")
             continue
-        if linha == "_" or normalizada == "INTERNA" or _UNDERSCORE_RE.match(linha):
+        if linha in {"_", "."} or normalizada == "INTERNA" or _UNDERSCORE_RE.match(linha):
+            continue
+        if _NOISE_LINE_RE.match(linha):
             continue
         if normalizada.startswith(("APROVADO POR", "GERIDO POR", "GESTÃO DO DOCUMENTO", "GESTAO DO DOCUMENTO")):
             continue
@@ -192,6 +219,8 @@ def detectar_categoria(texto: str) -> str:
     texto_sem_item = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*(?:[-–—]\s*)?", "", normalizado)
     if _DOCUMENT_CODE_RE.match(primeira_linha):
         return "padrao_documento"
+    if _ANEXO_DOCUMENTO_RE.match(primeira_linha.strip()):
+        return "anexo_documento"
     if (
         _TABLE_HEADER_RE.match(primeira_linha)
         or all(termo in normalizado for termo in ("O QUE FAZER", "EXECUTANTE", "ONDE REGISTRAR"))
@@ -330,6 +359,33 @@ def _eh_titulo_estrutural(linha: str) -> bool:
         return True
     # Um número isolado seguido de hífen costuma ser item de lista, não seção.
     return re.match(r"^\d+\.\d+(?:\.\d+)*\.?\s*[-–—]\s*\S+", linha) is not None
+
+
+def _item_numerado_da_linha(linha: str) -> str:
+    correspondencia = _NUMBERED_ITEM_RE.match(normalize_whitespace(linha))
+    if not correspondencia:
+        return ""
+    return correspondencia.group(1).rstrip(".")
+
+
+def _linha_numerada_e_instrucao(linha: str, tem_subitens: bool) -> bool:
+    """Distingue um passo operacional de um título hierárquico em anexos e manuais."""
+    correspondencia = _NUMBERED_ITEM_RE.match(normalize_whitespace(linha))
+    if not correspondencia or tem_subitens or _ANEXO_OPERATIONAL_HEADING_RE.match(linha):
+        return False
+    item = correspondencia.group(1).rstrip(".")
+    conteudo = correspondencia.group(2).lstrip("-–— ").strip()
+    niveis = len(item.split(".")) if item else 0
+    if not conteudo or conteudo == conteudo.upper():
+        return False
+    return niveis == 1 or (niveis >= 4 and _ACTION_IMPERATIVE_RE.match(conteudo) is not None)
+
+
+def _formatar_item_do_anexo(item: str, escopo: str) -> str:
+    if not item or not escopo.startswith("anexo_"):
+        return item
+    letra = escopo.removeprefix("anexo_").upper()
+    return f"Anexo {letra} - {item.rstrip('.')}"
 
 
 def _bloco_e_lista_numerada(bloco: list[str]) -> bool:
@@ -490,12 +546,34 @@ def separar_blocos(texto: str) -> list[dict]:
     blocos = _agrupar_fragmentos_logicos(blocos)
     blocos = _agrupar_cabecalho_documento(blocos)
     blocos = _remover_sumario_inicial(blocos)
+    segmentos_de_anexo: list[int] = []
+    segmento_atual = 0
+    for bloco in blocos:
+        primeira_linha = normalize_whitespace(bloco[0]) if bloco else ""
+        if _ANEXO_DOCUMENTO_RE.match(primeira_linha):
+            segmento_atual += 1
+        segmentos_de_anexo.append(segmento_atual)
+    itens_numerados = [
+        (segmentos_de_anexo[indice], _item_numerado_da_linha(bloco[0]))
+        for indice, bloco in enumerate(blocos)
+        if bloco and _item_numerado_da_linha(bloco[0])
+    ]
+    itens_com_subitens = {
+        (segmento, item)
+        for segmento, item in itens_numerados
+        if any(
+            outro_segmento == segmento and outro.startswith(f"{item}.")
+            for outro_segmento, outro in itens_numerados
+            if outro != item
+        )
+    }
 
     resultado: list[dict] = []
     escopo_contextual = "documento_principal"
     secao_contextual = ""
     atividade_contextual: dict[str, str] | None = None
     secao_principal_contextual = ""
+    anexos_documento_vistos: set[str] = set()
     escopos_explicitos = {"anexo", "anexo_a", "anexo_b", "tabela_2", "tabela_5", "tabelas_tecnicas"}
     for ordem, linhas in enumerate(blocos, start=1):
         bloco_texto = _juntar_linhas_do_bloco(linhas)
@@ -518,6 +596,17 @@ def separar_blocos(texto: str) -> list[dict]:
         if escopo_contextual != "tabela_2":
             atividade_contextual = None
         categoria = detectar_categoria(bloco_texto)
+        if categoria == "anexo_documento":
+            identificador_anexo = normalize_whitespace(linhas[0]).upper()
+            if identificador_anexo in anexos_documento_vistos:
+                categoria = "anexo_cabecalho_repetido"
+            else:
+                anexos_documento_vistos.add(identificador_anexo)
+        elif categoria == "padrao_documento" and escopo_contextual.startswith("anexo_"):
+            categoria = "cabecalho_documento_repetido"
+        item_numerado_fonte = _item_numerado_da_linha(linhas[0])
+        tem_subitens = (segmentos_de_anexo[ordem - 1], item_numerado_fonte) in itens_com_subitens
+        instrucao_numerada = _linha_numerada_e_instrucao(linhas[0], tem_subitens)
         if categoria == "secao_principal":
             secao_principal_contextual = normalized_for_match(bloco_texto)
         elif categoria == "geral" and secao_principal_contextual.endswith("OBJETIVO"):
@@ -537,6 +626,15 @@ def separar_blocos(texto: str) -> list[dict]:
                 categoria = "atividade_tabela_2"
             elif escopo_contextual == "tabela_5":
                 categoria = "atividade_anomalia"
+        if instrucao_numerada and escopo_contextual not in {"tabela_2", "tabela_5"}:
+            categoria = "instrucao_operacional"
+        elif (
+            escopo_contextual.startswith("anexo_")
+            and categoria == "subsecao_numerada"
+            and not tem_subitens
+            and not _ANEXO_OPERATIONAL_HEADING_RE.match(linhas[0])
+        ):
+            categoria = "item_numerado_anexo"
         itens_de_lista = sum(_LIST_ITEM_RE.match(linha) is not None for linha in linhas)
         lista_agrupada = itens_de_lista >= 2 and escopo_contextual != "tabela_2"
         if lista_agrupada:
@@ -544,7 +642,8 @@ def separar_blocos(texto: str) -> list[dict]:
                 categoria = "lista_informativa"
             elif categoria == "cabecalho_tabela" and escopo_contextual != "tabela_2":
                 categoria = "tabela_tecnica"
-        item_padrao_detectado = extrair_item_padrao(bloco_texto)
+        item_padrao_fonte = extrair_item_padrao(bloco_texto)
+        item_padrao_detectado = _formatar_item_do_anexo(item_padrao_fonte, escopo_contextual)
         candidato_acao = _texto_tem_acoes_explicitas(bloco_texto) or (
             bool(item_padrao_detectado)
             and not _eh_titulo_estrutural(linhas[0])
@@ -554,11 +653,16 @@ def separar_blocos(texto: str) -> list[dict]:
             "geral",
             "subsecao_numerada",
             "registros",
-        }:
+        } and not _ANEXO_OPERATIONAL_HEADING_RE.match(linhas[0]):
             categoria = "instrucao_operacional"
-        if bloco_texto and bloco_texto.lower().startswith("não "):
+        texto_sem_numeracao = re.sub(
+            r"^\s*\d+(?:\.\d+)*\.?\s*",
+            "",
+            bloco_texto,
+        )
+        if texto_sem_numeracao.lower().startswith("não "):
             categoria = "geral"
-        if bloco_texto and _eh_titulo_estrutural(linhas[0]) and item_padrao_detectado:
+        if bloco_texto and item_padrao_detectado and (_eh_titulo_estrutural(linhas[0]) or tem_subitens):
             secao_contextual = item_padrao_detectado.rstrip(".")
         contexto_tarefa: dict[str, str] = {}
         atividade_encontrada = _ATIVIDADE_TABELA_RE.match(linhas[0]) if escopo_contextual == "tabela_2" else None
@@ -576,12 +680,13 @@ def separar_blocos(texto: str) -> list[dict]:
                 "ordem": ordem,
                 "texto": bloco_texto,
                 "itemPadraoDetectado": item_padrao_detectado,
+                "itemPadraoFonte": item_padrao_fonte,
                 "categoria": categoria,
                 "escopo": escopo_contextual,
                 "palavras_chave": extrair_palavras_chave(bloco_texto),
                 "contextoTarefa": contexto_tarefa,
                 "secaoContextual": secao_contextual,
-                "tituloEstrutural": _eh_titulo_estrutural(linhas[0]),
+                "tituloEstrutural": _eh_titulo_estrutural(linhas[0]) and not instrucao_numerada and categoria != "item_numerado_anexo",
                 "listaAgrupada": lista_agrupada,
             }
         )

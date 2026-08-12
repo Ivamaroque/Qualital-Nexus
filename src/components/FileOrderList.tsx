@@ -50,7 +50,7 @@ export function FileOrderList({ files, onMoveUp, onMoveDown, onRemove, disabled 
               <div className="file-item__index">{index + 1}</div>
               <div className="file-item__meta">
                 <p className="file-item__name">{entry.file.name}</p>
-                <p className="file-item__sub">{formatSize(entry.file.size)} · {entry.file.type || "application/pdf"}</p>
+                <p className="file-item__sub">{formatSize(entry.file.size)} · {entry.file.type || "tipo não informado"}</p>
               </div>
               <div className="file-item__controls">
                 <button className="button button--ghost" type="button" onClick={() => onMoveUp(index)} disabled={disabled || index === 0}>

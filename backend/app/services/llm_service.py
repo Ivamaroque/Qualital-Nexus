@@ -15,11 +15,13 @@ from app.schemas.matriz import MatrizLinha, MatrizOutput
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
-    "Você é um conversor técnico do Qualital Nexus. Sua função é converter blocos de PDFs "
+    "Você é um conversor técnico do Qualital Nexus. Sua função é converter blocos de documentos "
     "técnicos em linhas para a Matriz de Priorização. Siga as regras do parser, os exemplos "
     "do parser e preserve a granularidade do documento. Não invente conteúdo. Não resuma "
     "excessivamente. Quando um parágrafo contiver várias ações explícitas, gere uma linha de Execução "
-    "para cada ação e repita a descrição integral do bloco em todas elas. Não crie linhas para "
+    "para cada ação e repita a descrição integral do bloco em todas elas. Em descricaoTarefa, preserve "
+    "obrigatoriamente o verbo, o objeto, as condições, os limites e as referências da ação. Não use "
+    "pronomes vagos quando o objeto estiver explícito no bloco. Não crie linhas para "
     "cabeçalho, rodapé, página, INTERNA ou aprovação. "
     "Retorne somente um objeto JSON compatível com o schema solicitado."
 )
@@ -163,7 +165,7 @@ def _obter_blocos_sem_saida(blocos: list[dict[str, Any]], matriz: MatrizOutput) 
 
 
 def _normalizar_ordens_da_resposta(blocos: list[dict[str, Any]], matriz: MatrizOutput) -> MatrizOutput:
-    """Converte índices locais que alguns modelos retornam para a ordem global do PDF."""
+    """Converte índices locais que alguns modelos retornam para a ordem global do documento."""
     ordens_esperadas = [bloco["ordem"] for bloco in blocos]
     conjunto_ordens_esperadas = set(ordens_esperadas)
     resposta_usa_indices_locais = (
@@ -207,7 +209,7 @@ def _criar_linha_de_fallback(bloco: dict[str, Any]) -> MatrizLinha:
     else:
         descricao = " ".join(str(bloco.get("texto") or "").split())
     if not descricao:
-        descricao = "Bloco sem texto extraível no PDF."
+        descricao = "Bloco sem texto extraível no documento."
     if bloco.get("categoria") == "padrao_documento":
         correspondencia = re.match(
             r"^((?:PE|PG|PR|PP)-[A-Z0-9]+-\d{5})\s*[-–—]\s*Versão\s*([0-9.]+)\s*[-–—]\s*(?:Padrão\s+Ativo\s*)?(.*)$",
@@ -258,7 +260,11 @@ def _criar_linha_de_fallback(bloco: dict[str, Any]) -> MatrizLinha:
 
 
 _ACTION_VERB_RE = (
-    r"(?:abrir|acionar|ajustar|alinhar|aplicar|atentar|atuar|avaliar|bloquear|coletar|comunicar|"
+    r"(?:abra|abrir|acione|acionar|ajuste|ajustar|alinhe|alinhar|aperte|apertar|aplique|aplicar|"
+    r"atue|atuar|avalie|avaliar|baixe|baixar|bloqueie|bloquear|clique|clicar|colete|coletar|"
+    r"comunique|comunicar|continue|continuar|digite|digitar|escolha|escolher|feche|fechar|"
+    r"informe|informar|inspecione|inspecionar|levante|levantar|observe|observar|recoloque|recolocar|"
+    r"retorne|retornar|retire|retirar|suba|subir|teste|testar|utilize|utilizar|varie|variar|"
     r"confirmar|contatar|desligar|emitir|encaminhar|entrar\s+em\s+contato|estabelecer|executar|"
     r"fechar|informar|iniciar|inspecionar|instalar|liberar|manter|medir|monitorar|operar|parar|"
     r"preencher|proceder|registrar|remover|reparar|restabelecer|retirar|seguir|sinalizar|"
@@ -278,11 +284,54 @@ _GERUND_TO_INFINITIVE = {
     "seguindo": "Seguir",
     "transferindo": "Transferir",
 }
+_IMPERATIVE_TO_INFINITIVE = {
+    "abra": "Abrir",
+    "acione": "Acionar",
+    "aperte": "Apertar",
+    "baixe": "Baixar",
+    "clique": "Clicar",
+    "continue": "Continuar",
+    "digite": "Digitar",
+    "escolha": "Escolher",
+    "feche": "Fechar",
+    "informe": "Informar",
+    "inspecione": "Inspecionar",
+    "levante": "Levantar",
+    "observe": "Observar",
+    "recoloque": "Recolocar",
+    "retorne": "Retornar",
+    "retire": "Retirar",
+    "suba": "Subir",
+    "teste": "Testar",
+    "utilize": "Utilizar",
+    "varie": "Variar",
+    "verifique": "Verificar",
+}
+_CONDITIONAL_PREFIX_RE = re.compile(
+    r"^(?:ap[oó]s\b|antes\s+de\b|caso\b|com\s+base\b|depois\s+de\b|"
+    r"durante\b|em\s+casos?\b|enquanto\b|no\s+caso\b|nos\s+casos?\b|"
+    r"ocorrendo\b|para\s+(?:o|a|os|as)\b|quando\b|se\b)",
+    re.IGNORECASE,
+)
+_TECHNICAL_NOUN_PATTERN = (
+    r"(?:c[aâ]maras?|compressor(?:es)?|dutos?|equipamentos?|gasodutos?|linhas?|"
+    r"sistemas?|tanques?|tubula[cç](?:[aã]o|[oõ]es)|v[aá]lvulas?|vasos?)"
+)
+_TECHNICAL_ENTITY_RE = re.compile(
+    rf"\b(?P<article>o|a|os|as)\s+(?P<entity>{_TECHNICAL_NOUN_PATTERN}"
+    r"(?:\s+(?:de|do|da|dos|das)\s+(?:\"[^\"]+\"|[\wÀ-ÿ-]+)){0,3})",
+    re.IGNORECASE,
+)
+_TECHNICAL_NOUN_RE = re.compile(
+    rf"\b(?P<entity>{_TECHNICAL_NOUN_PATTERN}"
+    r"(?:\s+(?:de|do|da|dos|das)\s+(?:\"[^\"]+\"|[\wÀ-ÿ-]+)){0,3})",
+    re.IGNORECASE,
+)
 
 
 def _texto_fonte_sem_item(bloco: dict[str, Any]) -> str:
     texto = " ".join(str(bloco.get("texto") or "").split())
-    item = str(bloco.get("itemPadraoDetectado") or "")
+    item = str(bloco.get("itemPadraoFonte") or bloco.get("itemPadraoDetectado") or "")
     if item:
         texto = re.sub(rf"^\s*{re.escape(item)}\s*(?:[-–—]\s*)?", "", texto).strip()
     return texto
@@ -307,12 +356,89 @@ def _normalizar_acao_para_infinitivo(texto: str) -> str:
         flags=re.IGNORECASE,
     )
     primeira_palavra = acao.split(maxsplit=1)[0] if acao else ""
-    infinitivo = _GERUND_TO_INFINITIVE.get(primeira_palavra.lower())
+    infinitivo = (
+        _GERUND_TO_INFINITIVE.get(primeira_palavra.lower())
+        or _IMPERATIVE_TO_INFINITIVE.get(primeira_palavra.lower())
+    )
     if infinitivo:
         acao = infinitivo + acao[len(primeira_palavra):]
     if acao:
         acao = acao[0].upper() + acao[1:]
     return acao.rstrip(" ;") + ("." if acao and acao[-1] not in ".!?" else "")
+
+
+def _extrair_contexto_condicional(prefixo: str) -> str:
+    contexto = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*", "", prefixo).strip(" ,;.")
+    if not _CONDITIONAL_PREFIX_RE.match(contexto):
+        return ""
+    partes = contexto.rsplit(",", maxsplit=1)
+    sujeito_final = partes[1].strip() if len(partes) == 2 else ""
+    if len(partes) == 2 and (
+        re.fullmatch(
+            r"(?:o|a|os|as)\s+(?:[\wÀ-ÿ./-]+\s*){1,8}",
+            sujeito_final,
+            re.IGNORECASE,
+        )
+        or re.fullmatch(r"(?:este|esta|estes|estas)", sujeito_final, re.IGNORECASE)
+    ):
+        contexto = partes[0].strip()
+    contexto = re.sub(
+        r"(?:,\s*)?\b(?:apenas|somente|s[oó])$",
+        "",
+        contexto,
+        flags=re.IGNORECASE,
+    ).strip(" ,")
+    return contexto
+
+
+def _ultima_entidade_tecnica(texto: str) -> str:
+    encontradas = list(_TECHNICAL_ENTITY_RE.finditer(texto))
+    if encontradas:
+        encontrada = encontradas[-1]
+        return f"{encontrada.group('article')} {encontrada.group('entity')}"
+    substantivos = list(_TECHNICAL_NOUN_RE.finditer(texto))
+    if not substantivos:
+        return ""
+    entidade = substantivos[-1].group("entity")
+    palavra = entidade.split(maxsplit=1)[0].lower()
+    feminina = palavra.startswith(
+        ("câmara", "camara", "linha", "tubulação", "tubulacao", "válvula", "valvula")
+    )
+    artigo = "a" if feminina else "o"
+    if palavra.endswith("s"):
+        artigo = "as" if artigo == "a" else "os"
+    return f"{artigo} {entidade}"
+
+
+def _anexar_contexto_condicional(acao: str, contexto: str) -> str:
+    if not acao or not contexto:
+        return acao
+    contexto_normalizado = _normalizar_texto_para_fundamentacao(contexto)
+    if contexto_normalizado and contexto_normalizado in _normalizar_texto_para_fundamentacao(acao):
+        return acao
+    contexto = contexto[0].lower() + contexto[1:] if contexto else contexto
+    return f"{acao.rstrip('.;')}, {contexto}."
+
+
+def _resolver_referencias_locais(acao: str, fonte_anterior: str) -> str:
+    entidade = _ultima_entidade_tecnica(fonte_anterior)
+    if not entidade:
+        return acao
+    acao = re.sub(r"\bque\s+a\s+mesma\b", f"que {entidade}", acao, flags=re.IGNORECASE)
+    acao = re.sub(r"^Bloquear\s+em\b", f"Bloquear {entidade} em", acao, flags=re.IGNORECASE)
+    return acao
+
+
+def _normalizar_acao_com_contexto(texto: str) -> str:
+    trecho = texto.strip(" ,;.")
+    inicio_acao = re.search(rf"\b{_ACTION_VERB_RE}\b", trecho, re.IGNORECASE)
+    if not inicio_acao or inicio_acao.start() == 0:
+        return _normalizar_acao_para_infinitivo(trecho)
+    contexto = _extrair_contexto_condicional(trecho[: inicio_acao.start()])
+    if not contexto:
+        return _normalizar_acao_para_infinitivo(trecho)
+    acao = _normalizar_acao_para_infinitivo(trecho[inicio_acao.start() :])
+    return _anexar_contexto_condicional(acao, contexto)
 
 
 def _separar_acoes_coordenadas(texto: str) -> list[str]:
@@ -328,17 +454,38 @@ def _extrair_acoes_explicitas(texto: str) -> list[str]:
     sentencas = re.split(r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚ])", " ".join(texto.split()))
     acoes: list[str] = []
     for sentenca in sentencas:
+        sentenca = re.sub(r"^\s*[-–—•·]\s*", "", sentenca)
         if re.search(r"\bnão\s+dev(?:e|em|erá|erão)\b", sentenca, re.IGNORECASE):
             continue
+        sentenca = re.sub(
+            rf"\b(deve-se|dever[aá]|dever[aã]o)\s+para\s+"
+            rf"((?:o|a|os|as)\b[^,.;]+)(?=,\s*{_ACTION_VERB_RE}\b)",
+            r"\1 parar \2",
+            sentenca,
+            flags=re.IGNORECASE,
+        )
         modal = re.search(r"\b(?:deverá|deverão|deve-se|devem-se|recomenda-se|poderá)\s+(.+)", sentenca, re.IGNORECASE)
         inicio = re.match(rf"^\s*{_ACTION_VERB_RE}\b.+", sentenca, re.IGNORECASE)
         acao_interna = re.search(rf"\b{_ACTION_VERB_RE}\b.+", sentenca, re.IGNORECASE)
         trecho = modal.group(1) if modal else sentenca if inicio else acao_interna.group(0) if acao_interna else ""
         if not trecho:
             continue
+        inicio_trecho = (
+            modal.start()
+            if modal
+            else inicio.start()
+            if inicio
+            else acao_interna.start()
+            if acao_interna
+            else 0
+        )
+        fonte_anterior = sentenca[:inicio_trecho]
+        contexto = _extrair_contexto_condicional(fonte_anterior)
         for parte in _separar_acoes_coordenadas(trecho):
             acao = _normalizar_acao_para_infinitivo(parte)
             if acao:
+                acao = _resolver_referencias_locais(acao, fonte_anterior)
+                acao = _anexar_contexto_condicional(acao, contexto)
                 acoes.append(acao)
     if len(acoes) > 1:
         # Uma remissão normativa introduz contexto; ações concretas subsequentes
@@ -356,13 +503,27 @@ def _extrair_acoes_como_fazer(texto: str) -> list[str]:
     partes = [parte for parte in re.split(r"\s*[;·•]\s*", conteudo) if parte.strip()]
     expandidas: list[str] = []
     for parte in partes:
-        parte = re.sub(r",\s+(?=Informar\b)", ";", parte, flags=re.IGNORECASE)
+        parte = re.sub(
+            r"\s+e,\s+(?=(?:ap[oó]s|antes|caso|em|no|na|nos|nas|quando|se)\b)",
+            ";",
+            parte,
+            flags=re.IGNORECASE,
+        )
         coordenadas = re.split(
             r"\s+e\s+(?=(?:registrando|atuando|informando|solicitando)\b)|\s*;\s*",
             parte,
             flags=re.IGNORECASE,
         )
-        expandidas.extend(_normalizar_acao_para_infinitivo(acao) for acao in coordenadas if acao.strip())
+        coordenadas = [acao.strip() for acao in coordenadas if acao.strip()]
+        if len(coordenadas) > 1:
+            ultima = coordenadas[-1]
+            complemento = ultima.split(maxsplit=1)[1] if len(ultima.split(maxsplit=1)) == 2 else ""
+            if complemento:
+                coordenadas = [
+                    f"{acao} {complemento}" if len(acao.split()) == 1 else acao
+                    for acao in coordenadas
+                ]
+        expandidas.extend(_normalizar_acao_com_contexto(acao) for acao in coordenadas)
     return [acao for acao in expandidas if acao]
 
 
@@ -370,6 +531,33 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
     """Preserva a estrutura mínima do PDF quando a IA não cobre um bloco."""
     categoria = bloco.get("categoria")
     linhas_fonte = [linha.strip() for linha in str(bloco.get("texto") or "").splitlines() if linha.strip()]
+    if categoria == "anexo_documento" and linhas_fonte:
+        anexo = re.match(r"^ANEXO\s+([A-Z])$", linhas_fonte[0], re.IGNORECASE)
+        if anexo:
+            identificador = f"Anexo {anexo.group(1).upper()}"
+            return [
+                MatrizLinha(
+                    ordemBloco=bloco["ordem"],
+                    itemPadrao=identificador,
+                    descricao="",
+                    tipoTarefa="Padrão/Anexo",
+                ),
+                MatrizLinha(
+                    ordemBloco=bloco["ordem"],
+                    descricao=linhas_fonte[0],
+                    tipoTarefa="Título/Subtítulo",
+                ),
+            ]
+    if categoria == "anexo_cabecalho_repetido" and linhas_fonte:
+        return [
+            MatrizLinha(
+                ordemBloco=bloco["ordem"],
+                descricao=linhas_fonte[0],
+                tipoTarefa="Título/Subtítulo",
+            )
+        ]
+    if categoria == "cabecalho_documento_repetido":
+        return [MatrizLinha(ordemBloco=bloco["ordem"], descricao="", tipoTarefa="Ignorar")]
     if (
         (
             bloco.get("tituloEstrutural")
@@ -469,7 +657,7 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
             for acao in acoes
         ]
     linha = _criar_linha_de_fallback(bloco)
-    if categoria == "subsecao_numerada" and bloco.get("itemPadraoDetectado"):
+    if categoria in {"geral", "subsecao_numerada", "item_numerado_anexo"} and bloco.get("itemPadraoDetectado"):
         return [
             linha.model_copy(
                 update={
@@ -516,6 +704,11 @@ def _bloco_tem_contrato_deterministico(bloco: dict[str, Any]) -> bool:
             "responsavel_unidade",
             "set_intertravamento",
             "subsecao_numerada",
+            "anexo_documento",
+            "anexo_cabecalho_repetido",
+            "cabecalho_documento_repetido",
+            "item_numerado_anexo",
+            "instrucao_operacional",
         }
         or (categoria in {"como_fazer", "porque_fazer"} and bloco.get("contextoTarefa"))
     )
@@ -549,7 +742,7 @@ def _remover_linhas_nao_fundamentadas(blocos: list[dict[str, Any]], matriz: Matr
         if bloco and _linha_e_fundamentada_no_bloco(linha, bloco):
             linhas.append(linha)
         else:
-            logger.info("Descartando linha da IA sem fundamentação no PDF ordemBloco=%s", linha.ordemBloco)
+            logger.info("Descartando linha da IA sem fundamentação no documento ordemBloco=%s", linha.ordemBloco)
     return MatrizOutput(linhas=linhas)
 
 

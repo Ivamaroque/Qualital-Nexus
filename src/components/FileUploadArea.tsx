@@ -51,7 +51,7 @@ export function FileUploadArea({ onFilesSelected, fileCount, errorMessage, disab
           <div className="stack" style={{ gap: 6 }}>
             <p className="eyebrow">Envio de arquivos</p>
             <h2 className="title" style={{ fontSize: "1.3rem" }}>
-              Arraste e solte os PDFs aqui
+              Arraste e solte documentos aqui
             </h2>
             <p className="text text--sm">Extensões permitidas neste MVP: {getAllowedExtractionFileLabel()}.</p>
           </div>
@@ -67,7 +67,9 @@ export function FileUploadArea({ onFilesSelected, fileCount, errorMessage, disab
 
         <div className="panel stack" style={{ background: "rgba(255,255,255,0.7)" }}>
           <p className="text text--strong">{helperLabel}</p>
-          <p className="text text--xs">{errorMessage ? errorMessage : "O sistema preserva a ordem visual da fila na hora do processamento."}</p>
+          <p className="text text--xs" role={errorMessage ? "alert" : "status"} aria-live="polite">
+            {errorMessage ? errorMessage : "O sistema preserva a ordem visual da fila na hora do processamento."}
+          </p>
         </div>
       </div>
 
@@ -75,7 +77,7 @@ export function FileUploadArea({ onFilesSelected, fileCount, errorMessage, disab
         ref={inputRef}
         hidden
         multiple
-        accept=".pdf,application/pdf"
+        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         type="file"
         onChange={(event) => {
           handleFiles(event.target.files);

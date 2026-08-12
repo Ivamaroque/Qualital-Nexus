@@ -53,7 +53,7 @@ function DashboardContent() {
           </p>
           <div className="row">
             <Link className="button button--primary" href="/ferramentas/extracao-pdf">
-              Ir para Extração PDF
+              Ir para Extração de documentos
             </Link>
             <span className="text text--xs">Acesso mínimo da ferramenta: usuario</span>
           </div>

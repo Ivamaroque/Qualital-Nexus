@@ -1,4 +1,4 @@
-export const ALLOWED_EXTRACTION_FILE_EXTENSIONS = ["pdf"] as const;
+export const ALLOWED_EXTRACTION_FILE_EXTENSIONS = ["pdf", "doc", "docx"] as const;
 
 function getFileExtension(fileName: string) {
   return fileName.split(".").pop()?.toLowerCase() ?? "";

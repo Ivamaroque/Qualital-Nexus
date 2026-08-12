@@ -1,6 +1,6 @@
 # Backend local — Qualital Nexus
 
-API FastAPI da ferramenta **Extração PDF**. Recebe PDFs em `multipart/form-data`, preserva a ordem das partes, consulta regras e exemplos no Supabase, transforma cada bloco com a Responses API da OpenAI e devolve `matriz_priorizacao.csv` em UTF-8 com BOM.
+API FastAPI da ferramenta **Extração de documentos**. Recebe arquivos PDF, DOC e DOCX em `multipart/form-data`, preserva a ordem das partes, consulta regras e exemplos no Supabase, transforma cada bloco e devolve `matriz_priorizacao.csv` em UTF-8 com BOM.
 
 ## Configuração
 
@@ -28,11 +28,11 @@ uvicorn app.main:app --reload --port 8000
 
 Teste a saúde do serviço em `GET http://localhost:8000/health`.
 
-Para o frontend, defina `NEXT_PUBLIC_API_URL=http://localhost:8000`. O cliente envia cada PDF como `files[]`, na mesma ordem exibida na tela. A API também aceita o campo legado `files`.
+Para o frontend, defina `NEXT_PUBLIC_API_URL=http://localhost:8000`. O cliente envia cada documento como `files[]`, na mesma ordem exibida na tela. A API também aceita o campo legado `files`.
 
 ## Endpoints
 
 - `POST /api/extracao-pdf/process`: devolve `matriz_priorizacao.csv` como download.
 - `POST /api/extracao-pdf/debug`: devolve blocos, categorias, contagem de exemplos RAG, regras selecionadas e prévia das linhas.
 
-Ambos aceitam um ou mais PDFs, até 20 arquivos de 25 MB por padrão. PDFs sem camada de texto ainda não têm OCR.
+Ambos aceitam um ou mais arquivos PDF, DOC ou DOCX, até 20 arquivos de 25 MB por padrão. PDFs sem camada de texto ainda não têm OCR.

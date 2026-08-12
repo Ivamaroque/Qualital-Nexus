@@ -12,7 +12,7 @@ function buildFakeCsv(files: File[]) {
   const rows = files.map((file, index) => [
     String(index + 1),
     file.name,
-    file.type || "application/pdf",
+    file.type || "tipo não informado",
     "processado"
   ]);
 

@@ -10,11 +10,12 @@ from starlette.datastructures import UploadFile
 
 from app.core.config import get_settings
 from app.services.csv_service import gerar_csv_matriz
+from app.services.document_service import extrair_texto_documento
 from app.services.llm_service import LLMConversionError, converter_blocos_com_ia
 from app.services.matrix_structure_service import consolidar_hierarquia_tarefas
 from app.services.normalizer_service import normalizar_linhas
 from app.services.parser_rules_service import buscar_parser_rules, filtrar_regras_por_bloco, preparar_blocos_para_ia
-from app.services.pdf_service import extrair_texto_pdf, limpar_texto_pdf, separar_blocos
+from app.services.pdf_service import limpar_texto_pdf, separar_blocos
 from app.services.processing_status import (
     atualizar_processamento,
     concluir_processamento,
@@ -117,7 +118,7 @@ async def _arquivos_da_requisicao(request: Request) -> list[UploadFile]:
     ]
     settings = get_settings()
     if not arquivos:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Envie ao menos um arquivo PDF.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Envie ao menos um documento PDF ou Word.")
     if len(arquivos) > settings.max_files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -153,24 +154,20 @@ async def _processar_arquivos(
                 arquivo_atual=file_order,
                 total_arquivos=len(arquivos),
             )
-        if not filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{filename} não é um PDF válido.")
         conteudo = await arquivo.read()
-        if not conteudo or not conteudo.startswith(b"%PDF-"):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{filename} não é um PDF válido.")
         if len(conteudo) > settings.max_file_size_bytes:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"{filename} excede o limite de {settings.max_file_size_mb} MB.",
             )
         try:
-            texto = await run_in_threadpool(extrair_texto_pdf, conteudo)
+            texto = await run_in_threadpool(extrair_texto_documento, conteudo, filename)
             texto_limpo = await run_in_threadpool(limpar_texto_pdf, texto)
             blocos = await run_in_threadpool(separar_blocos, texto_limpo)
             if not blocos:
                 raise ValueError("Nenhum bloco técnico foi identificado.")
         except ValueError as exc:
-            logger.info("Falha ao processar PDF filename=%s etapa=texto", filename)
+            logger.info("Falha ao processar documento filename=%s etapa=texto", filename)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Não foi possível processar {filename}: {exc}") from exc
 
         debug["arquivos_processados"].append({"ordem": file_order, "nome": filename, "blocos": len(blocos)})

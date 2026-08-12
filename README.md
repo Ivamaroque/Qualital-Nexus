@@ -28,3 +28,15 @@ Plataforma interna da Qualital para acessar ferramentas corporativas, com foco i
 - Proteção de páginas com `src/components/AuthGuard.tsx`
 - Serviço isolado da extração em `src/services/extracaoPdfService.ts`
 - Tipos em `src/types`
+
+## Rodar Back
+cd backend  
+>> python -m venv .venv
+>> .venv\Scripts\activate
+>> pip install -r requirements.txt
+>> uvicorn app.main:app --reload --port 8000
+
+## Rodar Front
+npm run dev
+
+

@@ -6,6 +6,7 @@ from app.utils.text_utils import normalized_for_match
 
 
 _NUMERIC_HTA_RE = re.compile(r"^\d+(?:\.\d+)*\.$")
+_ANEXO_ITEM_RE = re.compile(r"^ANEXO\s+[A-Z]\s*-\s*", re.IGNORECASE)
 _DOCUMENT_LIST_HEADING_RE = re.compile(
     r"\b(?:LISTA\s+DE\s+|SEGUINTES\s+)?(?:DOCUMENTOS|REFERENCIAS)"
     r"(?:\s+(?:DE\s+)?[A-Z0-9 ]+)?$"
@@ -20,6 +21,10 @@ _GENERIC_CONTAINER_TITLES = {
 
 def _item_normalizado(valor: Any) -> str:
     return str(valor or "").strip().rstrip(".")
+
+
+def _item_para_hierarquia(valor: Any) -> str:
+    return _ANEXO_ITEM_RE.sub("", _item_normalizado(valor)).rstrip(".")
 
 
 def _descricao_tarefa_com_item(descricao: str, item: str) -> str:
@@ -81,7 +86,7 @@ def consolidar_hierarquia_tarefas(
     resultado = _consolidar_continuacoes_informativas(linhas)
     titulos_por_item: dict[str, dict[str, Any]] = {}
     for linha in resultado:
-        item = _item_normalizado(linha.get("itemPadrao"))
+        item = _item_para_hierarquia(linha.get("itemPadrao"))
         if item and linha.get("tipoTarefa") == "Título/Subtítulo":
             titulos_por_item[item] = linha
 
@@ -123,7 +128,7 @@ def consolidar_hierarquia_tarefas(
             linha["descricaoTarefa"] = _descricao_tarefa_com_item(str(linha.get("descricaoTarefa") or ""), item)
             continue
 
-        secao = _item_normalizado(bloco.get("secaoContextual") or item)
+        secao = _item_para_hierarquia(bloco.get("secaoContextual") or item)
         # Tarefas sem numeração/contexto não podem compartilhar uma HTA por acidente.
         raiz = (
             _ancestral_operacional(secao, titulos_por_item)
@@ -139,7 +144,7 @@ def consolidar_hierarquia_tarefas(
                 titulo_raiz["subtarefaHTA"] = f"{numero_raiz[raiz]}."
                 titulo_raiz["descricaoTarefa"] = _descricao_tarefa_com_item(
                     str(titulo_raiz.get("descricao") or ""),
-                    raiz,
+                    str(titulo_raiz.get("itemPadrao") or raiz),
                 )
 
         prefixo = f"{numero_raiz[raiz]}."
@@ -157,7 +162,7 @@ def consolidar_hierarquia_tarefas(
                     )
                     titulo_subsecao["descricaoTarefa"] = _descricao_tarefa_com_item(
                         str(titulo_subsecao.get("descricao") or ""),
-                        subsecao,
+                        str(titulo_subsecao.get("itemPadrao") or subsecao),
                     )
             prefixo = f"{numero_raiz[raiz]}.{numero_subsecao[chave_subsecao]}."
 

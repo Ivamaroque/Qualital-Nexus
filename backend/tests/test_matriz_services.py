@@ -1,17 +1,24 @@
 import csv
 import io
 import logging
+import struct
 import sys
 import unittest
 from asyncio import run
 from pathlib import Path
 from unittest.mock import patch
 
+from docx import Document
 from starlette.datastructures import UploadFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.csv_service import CSV_COLUMNS, gerar_csv_matriz
+from app.services.document_service import (
+    _extrair_texto_doc,
+    extrair_texto_documento,
+    validar_documento,
+)
 from app.main import StatusPollingAccessFilter
 from app.services.llm_service import (
     LLMConversionError,
@@ -45,6 +52,63 @@ from app.routers.extracao_pdf import (
 
 
 class MatrizServicesTest(unittest.TestCase):
+    def test_docx_extraction_preserves_paragraphs_and_table_rows(self):
+        documento = Document()
+        documento.add_paragraph("1. OBJETIVO")
+        documento.add_paragraph("Descrever a atividade operacional.")
+        tabela = documento.add_table(rows=2, cols=2)
+        tabela.cell(0, 0).text = "Etapa"
+        tabela.cell(0, 1).text = "Ação"
+        tabela.cell(1, 0).text = "1"
+        tabela.cell(1, 1).text = "Verificar o sistema"
+        arquivo = io.BytesIO()
+        documento.save(arquivo)
+
+        texto = extrair_texto_documento(arquivo.getvalue(), "procedimento.docx")
+
+        self.assertIn("1. OBJETIVO", texto)
+        self.assertIn("Descrever a atividade operacional.", texto)
+        self.assertIn("Etapa\tAção", texto)
+        self.assertIn("1\tVerificar o sistema", texto)
+
+    def test_binary_doc_extraction_reads_compressed_piece_table(self):
+        texto_fonte = "ANEXO A\r1. OBJETIVO\rExecutar a rotina."
+        texto_codificado = texto_fonte.encode("cp1252")
+        posicao_texto = 0x200
+        word_document = bytearray(posicao_texto + len(texto_codificado))
+        word_document[posicao_texto:] = texto_codificado
+        struct.pack_into("<H", word_document, 0x0A, 0x0200)
+        limites = struct.pack("<II", 0, len(texto_fonte))
+        posicao_codificada = (posicao_texto * 2) | 0x40000000
+        descritor = struct.pack("<HIH", 0, posicao_codificada, 0)
+        segmentos = limites + descritor
+        clx = b"\x02" + struct.pack("<I", len(segmentos)) + segmentos
+        struct.pack_into("<II", word_document, 0x1A2, 0, len(clx))
+
+        class ArquivoOleFalso:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            @staticmethod
+            def exists(nome):
+                return nome in {"WordDocument", "1Table"}
+
+            @staticmethod
+            def openstream(nome):
+                return io.BytesIO(bytes(word_document) if nome == "WordDocument" else clx)
+
+        with patch("app.services.document_service.olefile.OleFileIO", return_value=ArquivoOleFalso()):
+            texto = _extrair_texto_doc(b"simulated content")
+
+        self.assertEqual(texto.splitlines(), ["ANEXO A", "1. OBJETIVO", "Executar a rotina."])
+
+    def test_document_validation_rejects_extension_content_mismatch(self):
+        with self.assertRaisesRegex(ValueError, "PDF válido"):
+            validar_documento("procedimento.pdf", b"Word content")
+
     def test_ollama_json_response_is_validated(self):
         matriz = _matriz_de_conteudo_json(
             '```json\n{"linhas":[{"ordemBloco":1,"descricao":"Executar rotina","tipoTarefa":"Execução"}]}\n```'
@@ -73,7 +137,7 @@ class MatrizServicesTest(unittest.TestCase):
         arquivo = UploadFile(filename="teste.pdf", file=io.BytesIO(b"%PDF-1.4 teste"))
 
         with (
-            patch("app.routers.extracao_pdf.extrair_texto_pdf", return_value="texto"),
+            patch("app.routers.extracao_pdf.extrair_texto_documento", return_value="texto"),
             patch("app.routers.extracao_pdf.limpar_texto_pdf", return_value="texto"),
             patch("app.routers.extracao_pdf.separar_blocos", return_value=blocos),
             patch("app.routers.extracao_pdf.buscar_parser_rules", return_value=[]),
@@ -89,6 +153,43 @@ class MatrizServicesTest(unittest.TestCase):
 
         self.assertEqual([linha["descricao"] for linha in linhas], ["Bloco 9"])
         self.assertEqual(debug["falhas_lotes"][0]["ordens_blocos"], list(range(1, 9)))
+
+    def test_processing_route_accepts_legacy_doc(self):
+        blocos = [
+            {
+                "ordem": 1,
+                "texto": "1. OBJETIVO",
+                "categoria": "secao_principal",
+                "escopo": "documento_principal",
+                "palavras_chave": [],
+            }
+        ]
+        assinatura_doc = bytes.fromhex("D0CF11E0A1B11AE1")
+        arquivo = UploadFile(filename="anexo.doc", file=io.BytesIO(assinatura_doc + b"content"))
+
+        with (
+            patch("app.routers.extracao_pdf.extrair_texto_documento", return_value="1. OBJETIVO") as extrator,
+            patch("app.routers.extracao_pdf.limpar_texto_pdf", return_value="1. OBJETIVO"),
+            patch("app.routers.extracao_pdf.separar_blocos", return_value=blocos),
+            patch("app.routers.extracao_pdf.buscar_parser_rules", return_value=[]),
+            patch(
+                "app.routers.extracao_pdf.converter_blocos_com_ia",
+                return_value=[
+                    {
+                        "ordemBloco": 1,
+                        "itemPadrao": "1.",
+                        "descricao": "OBJETIVO",
+                        "tipoTarefa": "Título/Subtítulo",
+                        "subtarefaHTA": "",
+                        "descricaoTarefa": "",
+                    }
+                ],
+            ),
+        ):
+            linhas, _debug = run(_processar_arquivos([arquivo], incluir_debug=False))
+
+        extrator.assert_called_once_with(assinatura_doc + b"content", "anexo.doc")
+        self.assertEqual(linhas[0]["descricao"], "OBJETIVO")
 
     def test_prompt_uses_examples_from_selected_parser_rules(self):
         regras = [
@@ -467,6 +568,33 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(blocos[1]["categoria"], "lista_informativa")
         self.assertFalse(blocos[1]["tituloEstrutural"])
 
+    def test_annex_numbering_distinguishes_index_entries_from_execution_steps(self):
+        blocos = separar_blocos(
+            limpar_texto_pdf(
+                "ANEXO B\n"
+                "1.1.2 – Acessar dados do registrador.\n"
+                "1.1.1.1 - Abra a tampa do registrador e aperte ENTER.\n"
+                "1.1.1.2 - Aperte USER LIST 1.\n"
+                "Propriedade da Petrobras PAGE 1 de NUMPAGES\n"
+                "EMED-099 Novo Valor percentual: 81,55000"
+            )
+        )
+
+        linhas = [
+            linha
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+        linha_indice = next(linha for linha in linhas if linha.itemPadrao == "Anexo B - 1.1.2")
+        execucoes = [linha for linha in linhas if linha.tipoTarefa == "Execução"]
+
+        self.assertEqual(linha_indice.tipoTarefa, "Informação")
+        self.assertEqual(len(execucoes), 3)
+        self.assertTrue(all(linha.itemPadrao.startswith("Anexo B - 1.1.1.") for linha in execucoes))
+        self.assertTrue(any(linha.descricaoTarefa.startswith("Abrir a tampa") for linha in execucoes))
+        self.assertNotIn("Propriedade da Petrobras", "\n".join(bloco["texto"] for bloco in blocos))
+        self.assertNotIn("EMED-099", "\n".join(bloco["texto"] for bloco in blocos))
+
     def test_parser_marks_only_explicit_operational_paragraphs_for_ai(self):
         blocos = separar_blocos(
             "3.2.4 - Itens críticos\n"
@@ -510,6 +638,83 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(len(linhas), 2)
         self.assertEqual(linhas[0].descricao, linhas[1].descricao)
         self.assertEqual([linha.subtarefaHTA for linha in linhas], ["1.1.", "1.2."])
+
+    def test_shared_complement_is_preserved_for_each_coordinated_action(self):
+        bloco = {
+            "ordem": 1,
+            "texto": 'COMO FAZER: Lendo e registrando no "Anexo C" os valores.',
+            "categoria": "como_fazer",
+            "contextoTarefa": {"itemPadrao": "2.3.1", "subtarefaHTA": "1."},
+        }
+
+        linhas = _criar_linhas_de_fallback(bloco)
+
+        self.assertEqual(len(linhas), 2)
+        self.assertIn('"Anexo C" os valores', linhas[0].descricaoTarefa)
+        self.assertIn('"Anexo C" os valores', linhas[1].descricaoTarefa)
+
+    def test_operational_actions_preserve_conditions_and_resolve_local_objects(self):
+        blocos = separar_blocos(
+            "4.2 - Resposta operacional\n"
+            "Caso haja suspeita de vazamento, deverá ser solicitada avaliação do gasoduto. "
+            "Ocorrendo confirmação de vazamento no gasoduto, este deverá ser bloqueado em suas extremidades."
+        )
+        bloco_operacional = next(
+            bloco for bloco in blocos if bloco["categoria"] == "instrucao_operacional"
+        )
+
+        tarefas = [
+            linha.descricaoTarefa
+            for linha in _criar_linhas_de_fallback(bloco_operacional)
+        ]
+
+        self.assertTrue(any("caso haja suspeita" in tarefa.lower() for tarefa in tarefas))
+        self.assertTrue(any("Bloquear o gasoduto" in tarefa for tarefa in tarefas))
+        self.assertTrue(any("ocorrendo confirmação" in tarefa.lower() for tarefa in tarefas))
+
+    def test_likely_missing_r_in_parar_is_recovered_only_with_coordinated_action(self):
+        blocos = separar_blocos(
+            "4.3 - Contingência\n"
+            "Nos casos de grande vazamento, deve-se para os compressores, alinhar para o flare."
+        )
+        bloco_operacional = next(
+            bloco for bloco in blocos if bloco["categoria"] == "instrucao_operacional"
+        )
+
+        tarefas = [
+            linha.descricaoTarefa
+            for linha in _criar_linhas_de_fallback(bloco_operacional)
+        ]
+
+        self.assertTrue(any(tarefa.startswith("Parar os compressores") for tarefa in tarefas))
+        self.assertTrue(all("grande vazamento" in tarefa for tarefa in tarefas))
+
+    def test_long_numbered_negative_statement_is_information_not_title(self):
+        blocos = separar_blocos(
+            "4.4.1. Não devem ser registrados desvios quando o sistema estiver em manutenção "
+            "programada e formalmente comunicada às áreas envolvidas."
+        )
+
+        linhas = _criar_linhas_de_fallback(blocos[0])
+
+        self.assertEqual(blocos[0]["categoria"], "geral")
+        self.assertEqual(linhas[0].tipoTarefa, "Informação")
+        self.assertEqual(linhas[0].itemPadrao, "4.4.1.")
+
+    def test_operational_contract_does_not_depend_on_llm_paraphrase(self):
+        blocos = separar_blocos(
+            "4.5 - Resposta a desvios\n"
+            "Caso haja vazamento, deverá ser solicitada inspeção do gasoduto. "
+            "Ocorrendo confirmação, o gasoduto deverá ser bloqueado."
+        )
+
+        with patch("app.services.llm_service._converter_prompt") as converter_mock:
+            linhas = converter_blocos_com_ia(blocos, [], [], {"filename": "teste.pdf"})
+
+        converter_mock.assert_not_called()
+        execucoes = [linha for linha in linhas if linha["tipoTarefa"] == "Execução"]
+        self.assertEqual(len(execucoes), 2)
+        self.assertTrue(all(linha["descricaoTarefa"] for linha in execucoes))
 
     def test_operational_table_uses_only_target_matrix_content(self):
         class TabelaFalsa:

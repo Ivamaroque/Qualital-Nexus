@@ -18,8 +18,8 @@ type QueueFile = {
 };
 
 const processingSteps = [
-  "Analisando PDFs e calculando o total",
-  "Extraindo texto dos PDFs",
+  "Analisando documentos e calculando o total",
+  "Extraindo texto dos documentos",
   "Aplicando regras e exemplos do parser",
   "Gerando linhas com IA",
   "Consolidando resultados",
@@ -91,7 +91,7 @@ function ExtracaoPdfContent() {
 
   function addFiles(nextFiles: File[]) {
     if (nextFiles.length === 0) {
-      setSelectedFileError("Selecione apenas arquivos PDF válidos.");
+      setSelectedFileError("Selecione arquivos PDF ou Word válidos.");
       return;
     }
 
@@ -133,7 +133,7 @@ function ExtracaoPdfContent() {
 
   async function handleProcessFiles() {
     if (files.length === 0) {
-      setProcessingError("Adicione pelo menos um PDF antes de processar.");
+      setProcessingError("Adicione pelo menos um documento antes de processar.");
       return;
     }
 
@@ -233,8 +233,8 @@ function ExtracaoPdfContent() {
     <main className="page-shell">
       <div className="container stack stack--xl">
         <AppHeader
-          title="Extração PDF"
-          subtitle="Envie PDFs técnicos em ordem e receba um CSV estruturado."
+          title="Extração de documentos"
+          subtitle="Envie documentos técnicos em PDF ou Word e receba um CSV estruturado."
           userEmail={userEmail}
           userName={displayName}
         />
@@ -242,7 +242,7 @@ function ExtracaoPdfContent() {
         <section className="surface card stack hero">
           <div className="stack" style={{ gap: 12 }}>
             <p className="eyebrow">Ferramenta operacional</p>
-            <h2 className="title title--lg">Envie os PDFs na ordem desejada e acompanhe o processamento em etapas.</h2>
+            <h2 className="title title--lg">Envie os documentos na ordem desejada e acompanhe o processamento em etapas.</h2>
             <p className="text text--sm">
               Este fluxo já preserva a ordenação visual dos arquivos para a futura chamada real ao backend FastAPI em multipart/form-data.
             </p>

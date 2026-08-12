@@ -88,7 +88,7 @@ export default function LoginPage() {
               <p className="eyebrow">Acesso interno</p>
               <h1 className="title title--xl">Entre para operar as ferramentas corporativas.</h1>
               <p className="text text--sm">
-                A primeira versão já abre o dashboard e a ferramenta de Extração PDF com fila ordenável, estados de processamento e download do CSV.
+                A ferramenta de extração de documentos possui fila ordenável, estados de processamento e download do CSV.
               </p>
             </div>
 
