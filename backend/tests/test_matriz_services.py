@@ -15,6 +15,7 @@ from app.services.csv_service import CSV_COLUMNS, gerar_csv_matriz
 from app.main import StatusPollingAccessFilter
 from app.services.llm_service import (
     LLMConversionError,
+    _criar_linhas_de_fallback,
     _criar_prompt,
     _normalizar_ordens_da_resposta,
     _preencher_item_padrao_detectado,
@@ -24,6 +25,7 @@ from app.services.llm_service import (
     _validar_cobertura_dos_blocos,
     converter_blocos_com_ia,
 )
+from app.services.matrix_structure_service import consolidar_hierarquia_tarefas
 from app.services.normalizer_service import normalizar_linhas
 from app.services.parser_rules_service import filtrar_regras_por_bloco, preparar_blocos_para_ia
 from app.services.pdf_service import _serializar_tabela, limpar_texto_pdf, separar_blocos
@@ -452,6 +454,63 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(blocos[1]["categoria"], "lista_informativa")
         self.assertEqual(blocos[1]["texto"].count("\n"), 2)
 
+    def test_pdf_parser_groups_numbered_list_without_turning_items_into_titles(self):
+        blocos = separar_blocos(
+            "3.2.9.2 - Ordem de fechamento\n"
+            "1 - Campo Alfa\n\n"
+            "2 - Campo Beta\n\n"
+            "3 - Campo Gama"
+        )
+
+        self.assertEqual(len(blocos), 2)
+        self.assertTrue(blocos[1]["listaAgrupada"])
+        self.assertEqual(blocos[1]["categoria"], "lista_informativa")
+        self.assertFalse(blocos[1]["tituloEstrutural"])
+
+    def test_parser_marks_only_explicit_operational_paragraphs_for_ai(self):
+        blocos = separar_blocos(
+            "3.2.4 - Itens críticos\n"
+            "Como boa prática, recomenda-se coletar uma amostra. O supervisor deverá avaliar o retorno.\n"
+            "3.2.5 - Indicadores\n"
+            "Não devem ser registrados desvios durante manutenção programada."
+        )
+
+        self.assertEqual(blocos[1]["categoria"], "instrucao_operacional")
+        self.assertNotEqual(blocos[3]["categoria"], "instrucao_operacional")
+
+    def test_operational_fallback_expands_actions_and_assigns_numeric_hta(self):
+        blocos = separar_blocos(
+            "2.3 - Controle operacional\n"
+            "Recomenda-se coletar uma amostra. O supervisor deverá avaliar o retorno."
+        )
+        linhas = [
+            linha.model_dump()
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+
+        consolidadas = consolidar_hierarquia_tarefas(blocos, linhas)
+        execucoes = [linha for linha in consolidadas if linha["tipoTarefa"] == "Execução"]
+
+        self.assertEqual(len(execucoes), 2)
+        self.assertEqual([linha["subtarefaHTA"] for linha in execucoes], ["1.1.", "1.2."])
+        self.assertTrue(all(linha["itemPadrao"] == "2.3" for linha in execucoes))
+        self.assertEqual(consolidadas[0]["subtarefaHTA"], "1.")
+
+    def test_coordinated_actions_repeat_the_full_source_description(self):
+        bloco = {
+            "ordem": 1,
+            "texto": 'COMO FAZER: Lendo e registrando no "Anexo C" os valores.',
+            "categoria": "como_fazer",
+            "contextoTarefa": {"itemPadrao": "2.3.1", "subtarefaHTA": "1."},
+        }
+
+        linhas = _criar_linhas_de_fallback(bloco)
+
+        self.assertEqual(len(linhas), 2)
+        self.assertEqual(linhas[0].descricao, linhas[1].descricao)
+        self.assertEqual([linha.subtarefaHTA for linha in linhas], ["1.1.", "1.2."])
+
     def test_operational_table_uses_only_target_matrix_content(self):
         class TabelaFalsa:
             def extract(self):
@@ -515,7 +574,7 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["ID da Subtarefa"], "")
         self.assertEqual(rows[1]["ID da Subtarefa"], "1")
-        self.assertEqual(rows[1]["Descrição"], "Executar atividade")
+        self.assertEqual(rows[1]["Descrição"], "Executar\natividade")
         self.assertEqual(
             CSV_COLUMNS,
             ("Item (Padrão)", "Descrição", "Tipo da Tarefa", "ID da Subtarefa", "Subtarefa (HTA)", "Descrição da tarefa"),

@@ -18,7 +18,9 @@ SYSTEM_PROMPT = (
     "Você é um conversor técnico do Qualital Nexus. Sua função é converter blocos de PDFs "
     "técnicos em linhas para a Matriz de Priorização. Siga as regras do parser, os exemplos "
     "do parser e preserve a granularidade do documento. Não invente conteúdo. Não resuma "
-    "excessivamente. Não crie linhas para cabeçalho, rodapé, página, INTERNA ou aprovação. "
+    "excessivamente. Quando um parágrafo contiver várias ações explícitas, gere uma linha de Execução "
+    "para cada ação e repita a descrição integral do bloco em todas elas. Não crie linhas para "
+    "cabeçalho, rodapé, página, INTERNA ou aprovação. "
     "Retorne somente um objeto JSON compatível com o schema solicitado."
 )
 
@@ -48,7 +50,7 @@ _TIPOS_TAREFA_POR_CATEGORIA = {
     "titulo_tabela": "Título/Subtítulo",
     "objetivo": "Informação",
     "atividade_tabela_2": "Título/Subtítulo",
-    "atividade_anomalia": "Título/Subtítulo",
+    "atividade_anomalia": "Informação",
     "como_fazer": "Execução",
     "porque_fazer": "Informação",
 }
@@ -105,15 +107,18 @@ def _criar_prompt(
             "do bloco de origem. Um bloco pode gerar várias linhas, mas nenhum bloco pode ficar sem linha. "
             "A orientacao_parser indica a regra que correspondeu ao trecho; siga-a quando existir. Use itemPadraoDetectado "
             "somente na linha de título da seção, removendo a numeração do início da descricao; para linhas de conteúdo "
-            "da mesma seção deixe itemPadrao vazio. Para tarefas de execução, preencha subtarefaHTA com a ação curta e "
-            "descricaoTarefa com o detalhamento explícito no PDF; nos demais tipos, deixe esses dois campos vazios."
+            "da mesma seção deixe itemPadrao vazio. Para cada ação explícita, gere uma linha Execução, repita em descricao "
+            "o texto integral do bloco, use descricaoTarefa no infinitivo e deixe subtarefaHTA vazio: a hierarquia numérica "
+            "será atribuída na consolidação global. Nos demais tipos, deixe subtarefaHTA e descricaoTarefa vazios."
         ),
         "orientacoes_parser": orientacoes_parser,
         "exemplos_parser": exemplos_compactos,
         "requisitos_conteudo": (
             "Cada texto de saída precisa ser comprovável pelo bloco de origem. Nunca gere nomes de regras, "
             "categorias, contratos, metadados ou exemplos do parser. Não repita frases. Em tabela operacional, "
-            "a atividade é Título/Subtítulo, COMO FAZER é Execução e PORQUE FAZER é Informação."
+            "a atividade é Título/Subtítulo, COMO FAZER é Execução e PORQUE FAZER é Informação. Só use Padrão/Anexo "
+            "quando a categoria do bloco indicar um documento ou anexo real; referências a códigos PE dentro de frases "
+            "continuam como Informação ou Execução."
         ),
         "ordensBlocoPermitidas": [bloco["ordem"] for bloco in blocos],
         "blocos": blocos_para_prompt,
@@ -252,12 +257,125 @@ def _criar_linha_de_fallback(bloco: dict[str, Any]) -> MatrizLinha:
     return MatrizLinha(ordemBloco=bloco["ordem"], descricao=descricao, tipoTarefa=tipo_tarefa)
 
 
+_ACTION_VERB_RE = (
+    r"(?:abrir|acionar|ajustar|alinhar|aplicar|atentar|atuar|avaliar|bloquear|coletar|comunicar|"
+    r"confirmar|contatar|desligar|emitir|encaminhar|entrar\s+em\s+contato|estabelecer|executar|"
+    r"fechar|informar|iniciar|inspecionar|instalar|liberar|manter|medir|monitorar|operar|parar|"
+    r"preencher|proceder|registrar|remover|reparar|restabelecer|retirar|seguir|sinalizar|"
+    r"solicitar|tomar|transportar|verificar)"
+)
+_GERUND_TO_INFINITIVE = {
+    "acompanhando": "Acompanhar",
+    "alinhando": "Alinhar",
+    "atuando": "Atuar",
+    "definindo": "Definir",
+    "direcionando": "Direcionar",
+    "informando": "Informar",
+    "lendo": "Ler",
+    "monitorando": "Monitorar",
+    "registrando": "Registrar",
+    "retirando": "Retirar",
+    "seguindo": "Seguir",
+    "transferindo": "Transferir",
+}
+
+
+def _texto_fonte_sem_item(bloco: dict[str, Any]) -> str:
+    texto = " ".join(str(bloco.get("texto") or "").split())
+    item = str(bloco.get("itemPadraoDetectado") or "")
+    if item:
+        texto = re.sub(rf"^\s*{re.escape(item)}\s*(?:[-–—]\s*)?", "", texto).strip()
+    return texto
+
+
+def _normalizar_acao_para_infinitivo(texto: str) -> str:
+    acao = texto.strip(" ;,.·")
+    acao = re.sub(r"^(?:COMO\s+FAZER\s*:\s*)", "", acao, flags=re.IGNORECASE)
+    modal = re.match(r"^(?:deverá|deverão|deve-se|devem-se|recomenda-se|poderá)\s+(.+)$", acao, re.IGNORECASE)
+    if modal:
+        acao = modal.group(1).strip()
+    acao = re.sub(r"^ser\s+solicitad[oa]\b", "Solicitar", acao, flags=re.IGNORECASE)
+    acao = re.sub(r"^ser\s+bloquead[oa]\b", "Bloquear", acao, flags=re.IGNORECASE)
+    acao = re.sub(r"^ser\s+tomad[oa]s?\b", "Tomar", acao, flags=re.IGNORECASE)
+    acao = re.sub(r"^ser\s+colocad[oa]\b", "Colocar", acao, flags=re.IGNORECASE)
+    # Recupera o erro textual comum "deve-se para X, alinhar..." somente quando
+    # a continuação comprova que se trata do verbo "parar", não da preposição.
+    acao = re.sub(
+        rf"^para\s+((?:o|a|os|as)\b[^,.;]+)(?=,\s*{_ACTION_VERB_RE}\b)",
+        r"Parar \1",
+        acao,
+        flags=re.IGNORECASE,
+    )
+    primeira_palavra = acao.split(maxsplit=1)[0] if acao else ""
+    infinitivo = _GERUND_TO_INFINITIVE.get(primeira_palavra.lower())
+    if infinitivo:
+        acao = infinitivo + acao[len(primeira_palavra):]
+    if acao:
+        acao = acao[0].upper() + acao[1:]
+    return acao.rstrip(" ;") + ("." if acao and acao[-1] not in ".!?" else "")
+
+
+def _separar_acoes_coordenadas(texto: str) -> list[str]:
+    partes = re.split(
+        rf",\s*(?={_ACTION_VERB_RE}\b)|\s+e\s+(?={_ACTION_VERB_RE}\b)",
+        texto,
+        flags=re.IGNORECASE,
+    )
+    return [parte.strip() for parte in partes if parte.strip()]
+
+
+def _extrair_acoes_explicitas(texto: str) -> list[str]:
+    sentencas = re.split(r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚ])", " ".join(texto.split()))
+    acoes: list[str] = []
+    for sentenca in sentencas:
+        if re.search(r"\bnão\s+dev(?:e|em|erá|erão)\b", sentenca, re.IGNORECASE):
+            continue
+        modal = re.search(r"\b(?:deverá|deverão|deve-se|devem-se|recomenda-se|poderá)\s+(.+)", sentenca, re.IGNORECASE)
+        inicio = re.match(rf"^\s*{_ACTION_VERB_RE}\b.+", sentenca, re.IGNORECASE)
+        acao_interna = re.search(rf"\b{_ACTION_VERB_RE}\b.+", sentenca, re.IGNORECASE)
+        trecho = modal.group(1) if modal else sentenca if inicio else acao_interna.group(0) if acao_interna else ""
+        if not trecho:
+            continue
+        for parte in _separar_acoes_coordenadas(trecho):
+            acao = _normalizar_acao_para_infinitivo(parte)
+            if acao:
+                acoes.append(acao)
+    if len(acoes) > 1:
+        # Uma remissão normativa introduz contexto; ações concretas subsequentes
+        # é que se tornam subtarefas de execução independentes.
+        acoes = [
+            acao
+            for acao in acoes
+            if not re.match(r"^Seguir o que se estabelece\b", acao, re.IGNORECASE)
+        ]
+    return acoes
+
+
+def _extrair_acoes_como_fazer(texto: str) -> list[str]:
+    conteudo = re.sub(r"^\s*COMO\s+FAZER\s*:\s*", "", " ".join(texto.split()), flags=re.IGNORECASE)
+    partes = [parte for parte in re.split(r"\s*[;·•]\s*", conteudo) if parte.strip()]
+    expandidas: list[str] = []
+    for parte in partes:
+        parte = re.sub(r",\s+(?=Informar\b)", ";", parte, flags=re.IGNORECASE)
+        coordenadas = re.split(
+            r"\s+e\s+(?=(?:registrando|atuando|informando|solicitando)\b)|\s*;\s*",
+            parte,
+            flags=re.IGNORECASE,
+        )
+        expandidas.extend(_normalizar_acao_para_infinitivo(acao) for acao in coordenadas if acao.strip())
+    return [acao for acao in expandidas if acao]
+
+
 def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
     """Preserva a estrutura mínima do PDF quando a IA não cobre um bloco."""
     categoria = bloco.get("categoria")
     linhas_fonte = [linha.strip() for linha in str(bloco.get("texto") or "").splitlines() if linha.strip()]
     if (
-        (bloco.get("tituloEstrutural") or categoria in {"secao_principal", "subsecao_numerada"})
+        (
+            bloco.get("tituloEstrutural")
+            or categoria == "secao_principal"
+            or (categoria == "subsecao_numerada" and len(" ".join(linhas_fonte)) <= 120)
+        )
         and categoria not in {"atividade_tabela_2", "atividade_anomalia"}
         and linhas_fonte
     ):
@@ -287,25 +405,91 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
                 tipoTarefa="Título/Subtítulo",
             )
         ]
+    if categoria == "tabela_tecnica" and linhas_fonte:
+        descricao = "\n".join(linhas_fonte) if bloco.get("listaAgrupada") else " ".join(linhas_fonte)
+        partes = re.split(
+            r"\s+(?=O set, ajustado\b)|\s+(?=Os sets podem ser alterados\b)",
+            descricao,
+            flags=re.IGNORECASE,
+        )
+        return [
+            MatrizLinha(ordemBloco=bloco["ordem"], descricao=parte.strip(), tipoTarefa="Informação")
+            for parte in partes
+            if parte.strip()
+        ]
+    if categoria == "definicoes" and linhas_fonte:
+        descricao = " ".join(linhas_fonte)
+        if re.search(r"https?://", descricao, re.IGNORECASE):
+            partes = re.split(r"\s+(?=[A-Z][A-Z0-9.]{1,12}\s*[-–—])", descricao)
+            return [
+                MatrizLinha(ordemBloco=bloco["ordem"], descricao=parte.strip(), tipoTarefa="Informação")
+                for parte in partes
+                if parte.strip()
+            ]
     if categoria == "como_fazer" and bloco.get("contextoTarefa"):
         linha_base = _criar_linha_de_fallback(bloco)
-        acoes = [
-            acao.strip(" ;")
-            for acao in re.split(r"(?:[;.]?\s*[•·]\s*)", linha_base.descricaoTarefa)
-            if acao.strip(" ;")
-        ]
+        acoes = _extrair_acoes_como_fazer(linha_base.descricaoTarefa) or [linha_base.descricaoTarefa]
+        separadores_visuais = re.search(r"[;·•]", linha_base.descricaoTarefa) is not None
         subtarefa_base = str((bloco.get("contextoTarefa") or {}).get("subtarefaHTA") or "").rstrip(".")
         return [
             linha_base.model_copy(
                 update={
-                    "descricao": f"COMO FAZER: {acao}" if indice == 1 else f"·{acao}",
+                    "descricao": (
+                        f"COMO FAZER: {acao}" if indice == 1 else f"·{acao}"
+                    )
+                    if separadores_visuais
+                    else linha_base.descricao,
                     "subtarefaHTA": f"{subtarefa_base}.{indice}.",
                     "descricaoTarefa": acao,
                 }
             )
             for indice, acao in enumerate(acoes, start=1)
         ]
-    return [_criar_linha_de_fallback(bloco)]
+    if categoria == "instrucao_operacional":
+        descricao = _texto_fonte_sem_item(bloco)
+        item_padrao = str(bloco.get("itemPadraoDetectado") or bloco.get("secaoContextual") or "")
+        acoes = _extrair_acoes_explicitas(descricao)
+        if not acoes:
+            return [
+                MatrizLinha(
+                    ordemBloco=bloco["ordem"],
+                    itemPadrao=item_padrao,
+                    descricao=descricao,
+                    tipoTarefa="Informação",
+                )
+            ]
+        return [
+            MatrizLinha(
+                ordemBloco=bloco["ordem"],
+                itemPadrao=item_padrao,
+                descricao=descricao,
+                tipoTarefa="Execução",
+                descricaoTarefa=acao,
+            )
+            for acao in acoes
+        ]
+    linha = _criar_linha_de_fallback(bloco)
+    if categoria == "subsecao_numerada" and bloco.get("itemPadraoDetectado"):
+        return [
+            linha.model_copy(
+                update={
+                    "itemPadrao": str(bloco["itemPadraoDetectado"]),
+                    "descricao": _texto_fonte_sem_item(bloco),
+                }
+            )
+        ]
+    if bloco.get("listaAgrupada"):
+        lista_numerada = re.match(r"^\s*(\d+)\s*(-\s+.+)", linha.descricao, re.DOTALL)
+        if lista_numerada:
+            return [
+                linha.model_copy(
+                    update={
+                        "itemPadrao": lista_numerada.group(1),
+                        "descricao": lista_numerada.group(2),
+                    }
+                )
+            ]
+    return [linha]
 
 
 def _bloco_tem_contrato_deterministico(bloco: dict[str, Any]) -> bool:
@@ -324,6 +508,14 @@ def _bloco_tem_contrato_deterministico(bloco: dict[str, Any]) -> bool:
             "tabela_tecnica",
             "definicoes",
             "nao_aplicavel",
+            "geral",
+            "lista_informativa",
+            "observacao",
+            "recursos_necessarios",
+            "registros",
+            "responsavel_unidade",
+            "set_intertravamento",
+            "subsecao_numerada",
         }
         or (categoria in {"como_fazer", "porque_fazer"} and bloco.get("contextoTarefa"))
     )
@@ -387,6 +579,46 @@ def _preencher_item_padrao_detectado(blocos: list[dict[str, Any]], matriz: Matri
         )
 
     return MatrizOutput(linhas=linhas_com_item)
+
+
+def _garantir_granularidade_operacional(blocos: list[dict[str, Any]], matriz: MatrizOutput) -> MatrizOutput:
+    """Impede que a IA comprima várias ações explícitas em uma única linha."""
+    por_ordem: dict[int, list[MatrizLinha]] = {}
+    for linha in matriz.linhas:
+        por_ordem.setdefault(linha.ordemBloco, []).append(linha)
+
+    consolidadas: list[MatrizLinha] = []
+    for bloco in blocos:
+        ordem = bloco["ordem"]
+        existentes = por_ordem.get(ordem, [])
+        if bloco.get("categoria") != "instrucao_operacional":
+            consolidadas.extend(existentes)
+            continue
+
+        fallback = _criar_linhas_de_fallback(bloco)
+        execucoes_esperadas = [linha for linha in fallback if linha.tipoTarefa == "Execução"]
+        execucoes_ia = [
+            linha
+            for linha in existentes
+            if linha.tipoTarefa == "Execução" and linha.descricaoTarefa.strip()
+        ]
+        if len(execucoes_ia) < len(execucoes_esperadas):
+            consolidadas.extend(fallback)
+            continue
+
+        descricao = _texto_fonte_sem_item(bloco)
+        item = str(bloco.get("itemPadraoDetectado") or bloco.get("secaoContextual") or "")
+        consolidadas.extend(
+            linha.model_copy(
+                update={
+                    "itemPadrao": item,
+                    "descricao": descricao,
+                    "subtarefaHTA": "",
+                }
+            )
+            for linha in execucoes_ia[: len(execucoes_esperadas)]
+        )
+    return MatrizOutput(linhas=consolidadas)
 
 
 def _converter_com_openai(prompt_usuario: dict[str, Any]) -> MatrizOutput:
@@ -613,6 +845,7 @@ def converter_blocos_com_ia(
             )
         matriz = MatrizOutput(linhas=[*matriz.linhas, *matriz_ia.linhas])
 
+    matriz = _garantir_granularidade_operacional(blocos, matriz)
     ordem_original = {bloco["ordem"]: indice for indice, bloco in enumerate(blocos)}
     matriz = MatrizOutput(
         linhas=sorted(matriz.linhas, key=lambda linha: ordem_original.get(linha.ordemBloco, len(blocos)))

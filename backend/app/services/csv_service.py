@@ -13,7 +13,11 @@ CSV_COLUMNS = (
 
 
 def _campo_csv(valor: Any) -> str:
-    return " ".join(str(valor or "").splitlines())
+    return "\n".join(
+        " ".join(linha.split())
+        for linha in str(valor or "").splitlines()
+        if linha.strip()
+    )
 
 
 def gerar_csv_matriz(linhas: list[dict[str, Any]]) -> str:

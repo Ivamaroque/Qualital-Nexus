@@ -22,8 +22,35 @@ _TECHNICAL_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 _MAX_BLOCK_CHARACTERS = 6_000
+_MAX_GROUPED_TABLE_CHARACTERS = 3_000
 _SUMARIO_TITULOS = {"OBJETIVO", "APLICAÇÃO", "DESCRIÇÃO", "REGISTROS", "DEFINIÇÕES"}
 _ATIVIDADE_TABELA_RE = re.compile(r"^\s*(\d+)\s*[-–—.]\s*(.+)")
+_NUMBERED_LIST_ITEM_RE = re.compile(r"^\s*\d+\s*[-–—]\s+\S+")
+_TECHNICAL_GROUP_HEADER_RE = re.compile(
+    r"^\s*Set'?s?\s+de\s+intertravamentos?\b",
+    re.IGNORECASE,
+)
+_TECHNICAL_PARAMETER_RE = re.compile(
+    r"^\s*(?:PSHH|PSH|PSL|PSLL|LSHH|LSH|LSL|LSLL|TSHH|TSH|TSL|TSLL|LAH|LAL)-?\w*\b",
+    re.IGNORECASE,
+)
+_ACTION_START_RE = re.compile(
+    r"^\s*(?:\d+(?:\.\d+)+\.?\s+)?(?:acionar|ajustar|alinhar|aplicar|atentar|atuar|avaliar|"
+    r"bloquear|coletar|comunicar|confirmar|contatar|desligar|emitir|encaminhar|"
+    r"entrar\s+em\s+contato|estabelecer|executar|fechar|informar|iniciar|inspecionar|instalar|"
+    r"liberar|manter|medir|monitorar|operar|parar|preencher|proceder|registrar|remover|reparar|"
+    r"restabelecer|retirar|seguir|sinalizar|solicitar|tomar|transportar|verificar)\b",
+    re.IGNORECASE,
+)
+_ACTION_CUE_RE = re.compile(
+    r"\b(?:dever[aá]|dever[aã]o|deve-se|recomenda-se|solicitar|bloquear|acionar|"
+    r"informar\s+imediatamente|entrar\s+em\s+contato|parar\s+os?|alinhar\s+para|"
+    r"estabelecer\s+(?:a\s+)?comunica[cç][aã]o|confirmar\s+que|avaliar\s+(?:o|a)|"
+    r"coletar\s+(?:uma|a)|tomar\s+as\s+a[cç][oõ]es|informar\s+(?:ao|a|o)|"
+    r"s[oó]\s+abrir|abrir\s+novo\s+registro)\b",
+    re.IGNORECASE,
+)
+_NEGATIVE_ACTION_RE = re.compile(r"\bn[aã]o\s+dev(?:e|em|er[aá]|er[aã]o)\b", re.IGNORECASE)
 
 
 def _linha_dentro_de_tabela(linha_bbox: tuple[float, float, float, float], tabela_bbox: tuple[float, ...]) -> bool:
@@ -162,6 +189,7 @@ def limpar_texto_pdf(texto: str) -> str:
 def detectar_categoria(texto: str) -> str:
     normalizado = normalized_for_match(texto)
     primeira_linha = texto.splitlines()[0] if texto else ""
+    texto_sem_item = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*(?:[-–—]\s*)?", "", normalizado)
     if _DOCUMENT_CODE_RE.match(primeira_linha):
         return "padrao_documento"
     if (
@@ -190,7 +218,7 @@ def detectar_categoria(texto: str) -> str:
         ("itens_criticos", "itens críticos"),
     )
     for categoria, termo in categorias:
-        if normalized_for_match(termo) in normalizado:
+        if texto_sem_item.startswith(normalized_for_match(termo)):
             return categoria
     if re.search(r"^\s*\d+(?:\.\d+)+", texto):
         return "subsecao_numerada"
@@ -300,7 +328,103 @@ def _eh_titulo_estrutural(linha: str) -> bool:
         re.IGNORECASE,
     ):
         return True
-    return re.match(r"^\d+(?:\.\d+)*\.?\s*[-–—]\s*\S+", linha) is not None
+    # Um número isolado seguido de hífen costuma ser item de lista, não seção.
+    return re.match(r"^\d+\.\d+(?:\.\d+)*\.?\s*[-–—]\s*\S+", linha) is not None
+
+
+def _bloco_e_lista_numerada(bloco: list[str]) -> bool:
+    return bool(bloco) and all(_NUMBERED_LIST_ITEM_RE.match(normalize_whitespace(linha)) for linha in bloco)
+
+
+def _bloco_e_lista_visual(bloco: list[str]) -> bool:
+    if not bloco:
+        return False
+    primeira = normalize_whitespace(bloco[0])
+    return (
+        _LIST_ITEM_RE.match(primeira) is not None
+        and _SECTION_RE.match(primeira) is None
+        and not _eh_titulo_estrutural(primeira)
+    )
+
+
+def _deve_unir_continuacao(bloco: list[str], seguinte: list[str]) -> bool:
+    if not bloco or not seguinte:
+        return False
+    anterior = normalize_whitespace(bloco[-1])
+    proxima = normalize_whitespace(seguinte[0])
+    if not anterior or not proxima or _SECTION_RE.match(proxima) or _TABLE_RE.match(proxima):
+        return False
+    if _eh_titulo_estrutural(bloco[0]) and not anterior.lower().endswith((" e", " ou")):
+        return False
+    inicia_continuacao = proxima[0].islower() or proxima.upper().startswith(("PSIG ", "KGF/", "CM2 "))
+    termina_aberto = anterior.endswith((",", ";", ":", " e", " ou")) or anterior[-1] not in ".!?"
+    return inicia_continuacao and termina_aberto
+
+
+def _agrupar_fragmentos_logicos(blocos: list[list[str]]) -> list[list[str]]:
+    """Reconstrói listas, tabelas e frases quebradas sem depender do documento de exemplo."""
+    agrupados: list[list[str]] = []
+    indice = 0
+    while indice < len(blocos):
+        atual = list(blocos[indice])
+
+        if _bloco_e_lista_numerada(atual):
+            indice += 1
+            while indice < len(blocos) and _bloco_e_lista_numerada(blocos[indice]):
+                atual.extend(blocos[indice])
+                indice += 1
+            agrupados.append(atual)
+            continue
+
+        if _bloco_e_lista_visual(atual):
+            marcador = normalize_whitespace(atual[0])[:1]
+            indice += 1
+            while (
+                indice < len(blocos)
+                and _bloco_e_lista_visual(blocos[indice])
+                and normalize_whitespace(blocos[indice][0])[:1] == marcador
+                and sum(len(linha) + 1 for linha in [*atual, *blocos[indice]]) <= _MAX_GROUPED_TABLE_CHARACTERS
+            ):
+                atual.extend(blocos[indice])
+                indice += 1
+            agrupados.append(atual)
+            continue
+
+        primeira = normalize_whitespace(atual[0]) if atual else ""
+        if _TECHNICAL_GROUP_HEADER_RE.match(primeira):
+            indice += 1
+            while indice < len(blocos):
+                proxima = normalize_whitespace(blocos[indice][0]) if blocos[indice] else ""
+                if _TECHNICAL_GROUP_HEADER_RE.match(proxima):
+                    break
+                if not _TECHNICAL_PARAMETER_RE.match(proxima) and not _deve_unir_continuacao(atual, blocos[indice]):
+                    break
+                atual.extend(blocos[indice])
+                indice += 1
+            agrupados.append(atual)
+            continue
+
+        indice += 1
+        while indice < len(blocos) and _deve_unir_continuacao(atual, blocos[indice]):
+            atual.extend(blocos[indice])
+            indice += 1
+        agrupados.append(atual)
+    return agrupados
+
+
+def _texto_tem_acoes_explicitas(texto: str) -> bool:
+    sem_negativas = _NEGATIVE_ACTION_RE.sub("", texto)
+    if _ACTION_START_RE.match(sem_negativas):
+        return True
+    normalizado = normalized_for_match(sem_negativas)
+    if "DEVE-SE SEGUIR" in normalizado or "RECOMENDA-SE COLETAR" in normalizado:
+        return True
+    return len(_ACTION_CUE_RE.findall(sem_negativas)) >= 2
+
+
+def _item_numerado_tem_acao_explicita(texto: str) -> bool:
+    sem_negativas = _NEGATIVE_ACTION_RE.sub("", texto)
+    return _ACTION_CUE_RE.search(sem_negativas) is not None
 
 
 def _juntar_linhas_do_bloco(linhas: list[str]) -> str:
@@ -363,6 +487,7 @@ def separar_blocos(texto: str) -> list[dict]:
             atual = []
     if atual:
         blocos.append(atual)
+    blocos = _agrupar_fragmentos_logicos(blocos)
     blocos = _agrupar_cabecalho_documento(blocos)
     blocos = _remover_sumario_inicial(blocos)
 
@@ -399,6 +524,8 @@ def separar_blocos(texto: str) -> list[dict]:
             categoria = "objetivo"
         elif categoria == "geral" and secao_principal_contextual.endswith("APLICACAO"):
             categoria = "aplicacao"
+        elif categoria == "geral" and secao_principal_contextual.endswith("DEFINICOES"):
+            categoria = "definicoes"
         if escopo_contextual == "tabelas_tecnicas" and categoria not in {"titulo_tabela", "cabecalho_tabela"}:
             categoria = "tabela_tecnica"
         if escopo_contextual == "tabela_2" and categoria == "secao_principal":
@@ -418,7 +545,20 @@ def separar_blocos(texto: str) -> list[dict]:
             elif categoria == "cabecalho_tabela" and escopo_contextual != "tabela_2":
                 categoria = "tabela_tecnica"
         item_padrao_detectado = extrair_item_padrao(bloco_texto)
-        if categoria == "subsecao_numerada" and item_padrao_detectado:
+        candidato_acao = _texto_tem_acoes_explicitas(bloco_texto) or (
+            bool(item_padrao_detectado)
+            and not _eh_titulo_estrutural(linhas[0])
+            and _item_numerado_tem_acao_explicita(bloco_texto)
+        )
+        if bloco_texto and candidato_acao and categoria in {
+            "geral",
+            "subsecao_numerada",
+            "registros",
+        }:
+            categoria = "instrucao_operacional"
+        if bloco_texto and bloco_texto.lower().startswith("não "):
+            categoria = "geral"
+        if bloco_texto and _eh_titulo_estrutural(linhas[0]) and item_padrao_detectado:
             secao_contextual = item_padrao_detectado.rstrip(".")
         contexto_tarefa: dict[str, str] = {}
         atividade_encontrada = _ATIVIDADE_TABELA_RE.match(linhas[0]) if escopo_contextual == "tabela_2" else None
@@ -440,6 +580,7 @@ def separar_blocos(texto: str) -> list[dict]:
                 "escopo": escopo_contextual,
                 "palavras_chave": extrair_palavras_chave(bloco_texto),
                 "contextoTarefa": contexto_tarefa,
+                "secaoContextual": secao_contextual,
                 "tituloEstrutural": _eh_titulo_estrutural(linhas[0]),
                 "listaAgrupada": lista_agrupada,
             }

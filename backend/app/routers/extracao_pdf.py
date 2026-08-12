@@ -11,6 +11,7 @@ from starlette.datastructures import UploadFile
 from app.core.config import get_settings
 from app.services.csv_service import gerar_csv_matriz
 from app.services.llm_service import LLMConversionError, converter_blocos_com_ia
+from app.services.matrix_structure_service import consolidar_hierarquia_tarefas
 from app.services.normalizer_service import normalizar_linhas
 from app.services.parser_rules_service import buscar_parser_rules, filtrar_regras_por_bloco, preparar_blocos_para_ia
 from app.services.pdf_service import extrair_texto_pdf, limpar_texto_pdf, separar_blocos
@@ -205,6 +206,7 @@ async def _processar_arquivos(
         file_order = arquivo_preparado["file_order"]
         blocos = arquivo_preparado["blocos"]
         lotes = arquivo_preparado["lotes"]
+        linhas_arquivo: list[dict[str, Any]] = []
         for lote_order, lote in enumerate(lotes, start=1):
             regras_bloco = _regras_do_lote(regras, lote)
             exemplos_parser = _exemplos_parser_do_lote(regras_bloco)
@@ -299,9 +301,8 @@ async def _processar_arquivos(
                     etapas_concluidas=etapas_concluidas,
                     etapas_totais=etapas_totais,
                 )
-            linhas = normalizar_linhas(linhas)
             etapas_concluidas += 1
-            acumuladas.extend(linhas)
+            linhas_arquivo.extend(linhas)
             debug["total_blocos"] += len(lote)
             if incluir_debug:
                 for bloco_do_lote in lote:
@@ -312,11 +313,15 @@ async def _processar_arquivos(
                     )
                     debug["exemplos_parser_por_bloco"].append({**identificador, "quantidade": len(exemplos_parser)})
                     debug["regras_usadas_por_bloco"].append({**identificador, "regras": regras_bloco})
-                debug["preview_linhas_geradas"].extend(linhas)
+        linhas_arquivo = await run_in_threadpool(consolidar_hierarquia_tarefas, blocos, linhas_arquivo)
+        linhas_normalizadas_arquivo = normalizar_linhas(linhas_arquivo)
+        acumuladas.extend(linhas_normalizadas_arquivo)
+        if incluir_debug:
+            debug["preview_linhas_geradas"].extend(linhas_normalizadas_arquivo)
         logger.info("Arquivo processado filename=%s blocos=%d", filename, len(blocos))
 
     debug["etapas_concluidas"] = etapas_concluidas
-    return normalizar_linhas(acumuladas), debug
+    return acumuladas, debug
 
 
 @router.get("/process/{identificador}/status")
