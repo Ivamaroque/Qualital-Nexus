@@ -488,20 +488,28 @@ def _aplicar_hierarquia_local_do_anexo(blocos: list[dict]) -> None:
             bloco["secaoContextual"] = bloco["itemPadraoDetectado"]
             continue
         if item_fonte and _conteudo_em_caixa_alta(texto):
+            # Nos anexos, os dois primeiros niveis numerados representam a
+            # estrutura da atividade. A partir do terceiro nivel, textos em
+            # caixa alta normalmente identificam equipamento/controlador e,
+            # na matriz, sao classificados como Informacao, nao como titulo.
+            profundidade_item = len(item_fonte.rstrip(".").split("."))
+            eh_titulo_estrutural = profundidade_item <= 2
             item_pai = item_fonte.rstrip(".")
             em_procedimento = False
             contador_local = 0
-            if bloco.get("categoria") == "item_numerado_anexo":
+            if eh_titulo_estrutural and bloco.get("categoria") == "item_numerado_anexo":
                 bloco["categoria"] = "subsecao_numerada"
-            bloco["tituloEstrutural"] = True
+            elif not eh_titulo_estrutural:
+                bloco["categoria"] = "item_numerado_anexo"
+            bloco["tituloEstrutural"] = eh_titulo_estrutural
             bloco["secaoContextual"] = _formatar_item_do_anexo(item_fonte, str(bloco.get("escopo")))
             continue
 
         if normalized_for_match(texto).rstrip(".") == "PROCEDIMENTO" and item_pai:
             em_procedimento = True
             contador_local = 0
-            bloco["categoria"] = "secao_principal"
-            bloco["tituloEstrutural"] = True
+            bloco["categoria"] = "geral"
+            bloco["tituloEstrutural"] = False
             bloco["secaoContextual"] = _formatar_item_do_anexo(item_pai, str(bloco.get("escopo")))
             continue
 
@@ -528,16 +536,17 @@ def _aplicar_hierarquia_local_do_anexo(blocos: list[dict]) -> None:
             continue
 
         bloco["secaoContextual"] = _formatar_item_do_anexo(item_pai, str(bloco.get("escopo"))).rstrip(".")
+        texto_sem_item = _conteudo_item_numerado(texto) or texto
         item_local_com_filhos = bool(
             item_fonte
             and bloco.get("temSubitens")
             and len(item_fonte.rstrip(".").split(".")) == 1
+            and re.search(r"\b(?:como\s+segue|seguintes\s+passos)\b", texto_sem_item, re.IGNORECASE)
         )
         bloco["tituloEstrutural"] = item_local_com_filhos
-        texto_sem_item = _conteudo_item_numerado(texto) or texto
         if item_local_com_filhos:
             bloco["categoria"] = "secao_principal"
-        elif normalized_for_match(texto_sem_item).startswith("SE NAO"):
+        elif normalized_for_match(texto_sem_item).startswith(("SE NAO", "NAO HAVENDO")):
             bloco["categoria"] = "geral"
         else:
             bloco["categoria"] = "instrucao_operacional"

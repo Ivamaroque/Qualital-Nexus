@@ -714,6 +714,33 @@ class MatrizServicesTest(unittest.TestCase):
         ])
         self.assertEqual(grupo[0]["descricao"], "Recolocação da placa")
 
+    def test_annex_keeps_controller_as_information_and_does_not_promote_procedure_or_action(self):
+        blocos = separar_blocos(
+            "ANEXO B\n"
+            "2.2.2. CONTROLADOR E INDICADOR DE NÍVEL\n"
+            "Procedimento.\n"
+            "1. Escolha a tela desejada.\n"
+            "2. Clique no controlador, defina o set point.\n"
+            "3. Acompanhe a atuação da válvula."
+        )
+        linhas = [
+            linha.model_dump()
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+        consolidadas = consolidar_hierarquia_tarefas(blocos, linhas, raiz_inicial=12)
+
+        controlador = next(linha for linha in consolidadas if "CONTROLADOR E INDICADOR" in linha["descricao"])
+        procedimento = next(linha for linha in consolidadas if linha["descricao"] == "Procedimento.")
+        clique = next(linha for linha in consolidadas if linha["descricao"].startswith("Clique no controlador"))
+
+        self.assertEqual(controlador["tipoTarefa"], "Informação")
+        self.assertEqual(controlador["subtarefaHTA"], "")
+        self.assertEqual(procedimento["tipoTarefa"], "Informação")
+        self.assertEqual(procedimento["subtarefaHTA"], "")
+        self.assertEqual(clique["tipoTarefa"], "Execução")
+        self.assertEqual(clique["subtarefaHTA"], "12.2.2.")
+
     def test_parser_marks_only_explicit_operational_paragraphs_for_ai(self):
         blocos = separar_blocos(
             "3.2.4 - Itens críticos\n"
