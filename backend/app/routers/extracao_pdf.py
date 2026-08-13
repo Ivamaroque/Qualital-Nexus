@@ -173,7 +173,7 @@ async def _processar_arquivos(
         try:
             texto = await run_in_threadpool(extrair_texto_documento, conteudo, filename)
             texto_limpo = await run_in_threadpool(limpar_texto_pdf, texto)
-            blocos = await run_in_threadpool(separar_blocos, texto_limpo)
+            blocos = await run_in_threadpool(separar_blocos, texto_limpo, filename)
             if not blocos:
                 raise ValueError("Nenhum bloco técnico foi identificado.")
         except ValueError as exc:

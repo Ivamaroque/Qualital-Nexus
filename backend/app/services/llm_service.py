@@ -11,6 +11,7 @@ import httpx
 from app.core.config import get_settings
 from app.core.openai_client import get_openai_client
 from app.schemas.matriz import MatrizLinha, MatrizOutput
+from app.utils.text_utils import normalized_for_match
 
 logger = logging.getLogger(__name__)
 
@@ -266,15 +267,18 @@ def _criar_linha_de_fallback(bloco: dict[str, Any]) -> MatrizLinha:
 
 
 _ACTION_VERB_RE = (
-    r"(?:abra|abrir|acione|acionar|ajuste|ajustar|alinhe|alinhar|aperte|apertar|aplique|aplicar|"
+    r"(?:aborte|abortar|abra|abrir|acione|acionar|acople|acoplar|aguarde|aguardar|ajuste|ajustar|"
+    r"alinhe|alinhar|anote|anotar|aperte|apertar|aplique|aplicar|"
     r"atue|atuar|avalie|avaliar|baixe|baixar|bloqueie|bloquear|clique|clicar|colete|coletar|"
     r"comunique|comunicar|continue|continuar|digite|digitar|escolha|escolher|feche|fechar|"
-    r"informe|informar|inspecione|inspecionar|levante|levantar|observe|observar|recoloque|recolocar|"
+    r"informe|informar|inspecione|inspecionar|instale|instalar|interrompa|interromper|isole|isolar|"
+    r"levante|levantar|ligue|ligar|observe|observar|posicione|posicionar|preencha|preencher|"
+    r"realize|realizar|recoloque|recolocar|"
     r"retorne|retornar|retire|retirar|suba|subir|teste|testar|utilize|utilizar|varie|variar|"
     r"confirmar|contatar|desligar|emitir|encaminhar|entrar\s+em\s+contato|estabelecer|executar|"
     r"fechar|informar|iniciar|inspecionar|instalar|liberar|manter|medir|monitorar|operar|parar|"
     r"preencher|proceder|registrar|remover|reparar|restabelecer|retirar|seguir|sinalizar|"
-    r"solicitar|tomar|transportar|verificar)"
+    r"solicitar|tomar|transportar|travar|verificar)"
 )
 _GERUND_TO_INFINITIVE = {
     "acompanhando": "Acompanhar",
@@ -291,8 +295,13 @@ _GERUND_TO_INFINITIVE = {
     "transferindo": "Transferir",
 }
 _IMPERATIVE_TO_INFINITIVE = {
+    "aborte": "Abortar",
     "abra": "Abrir",
     "acione": "Acionar",
+    "acople": "Acoplar",
+    "aguarde": "Aguardar",
+    "alinhe": "Alinhar",
+    "anote": "Anotar",
     "aperte": "Apertar",
     "baixe": "Baixar",
     "clique": "Clicar",
@@ -302,13 +311,21 @@ _IMPERATIVE_TO_INFINITIVE = {
     "feche": "Fechar",
     "informe": "Informar",
     "inspecione": "Inspecionar",
+    "instale": "Instalar",
+    "interrompa": "Interromper",
+    "isole": "Isolar",
     "levante": "Levantar",
+    "ligue": "Ligar",
     "observe": "Observar",
+    "posicione": "Posicionar",
+    "preencha": "Preencher",
+    "realize": "Realizar",
     "recoloque": "Recolocar",
     "retorne": "Retornar",
     "retire": "Retirar",
     "suba": "Subir",
     "teste": "Testar",
+    "trave": "Travar",
     "utilize": "Utilizar",
     "varie": "Variar",
     "verifique": "Verificar",
@@ -340,12 +357,14 @@ def _texto_fonte_sem_item(bloco: dict[str, Any]) -> str:
     item = str(bloco.get("itemPadraoFonte") or bloco.get("itemPadraoDetectado") or "")
     if item:
         texto = re.sub(rf"^\s*{re.escape(item)}\s*(?:[-–—]\s*)?", "", texto).strip()
+    texto = re.sub(r"^\s*[•·▪◦*]\s*", "", texto)
     return texto
 
 
 def _normalizar_acao_para_infinitivo(texto: str) -> str:
     acao = texto.strip(" ;,.·")
     acao = re.sub(r"^(?:COMO\s+FAZER\s*:\s*)", "", acao, flags=re.IGNORECASE)
+    acao = re.sub(r"^[A-Z]\s*[.)]\s*", "", acao, flags=re.IGNORECASE)
     modal = re.match(r"^(?:deverá|deverão|deve-se|devem-se|recomenda-se|poderá)\s+(.+)$", acao, re.IGNORECASE)
     if modal:
         acao = modal.group(1).strip()
@@ -533,26 +552,55 @@ def _extrair_acoes_como_fazer(texto: str) -> list[str]:
     return [acao for acao in expandidas if acao]
 
 
+def _segmentar_passo_operacional(texto: str) -> list[tuple[str, str]]:
+    """Separa ações principais sem fragmentar internamente observações e condições."""
+    partes_observacao = re.split(
+        r"\s+(?=(?:OBS(?:ERVA(?:ÇÃO|CAO))?\s*\d*\s*:))",
+        " ".join(texto.split()),
+        flags=re.IGNORECASE,
+    )
+    segmentos: list[tuple[str, str]] = []
+    for parte in partes_observacao:
+        parte = parte.strip()
+        if not parte:
+            continue
+        observacao = re.match(r"^OBS(?:ERVA(?:ÇÃO|CAO))?\s*\d*\s*:", parte, re.IGNORECASE)
+        if observacao:
+            if not re.search(rf"{_ACTION_VERB_RE}\b", parte, re.IGNORECASE):
+                if segmentos and "NESTE MOMENTO" not in normalized_for_match(parte):
+                    tipo, anterior = segmentos[-1]
+                    segmentos[-1] = (tipo, f"{anterior} {parte}".strip())
+                else:
+                    segmentos.append(("Informação", parte))
+            else:
+                segmentos.append(("Execução", parte))
+            continue
+        acoes_diretas = re.split(
+            rf"(?<=[.;])\s+(?:E\s+)?(?={_ACTION_VERB_RE}\b)",
+            parte,
+            flags=re.IGNORECASE,
+        )
+        segmentos.extend(("Execução", acao.strip()) for acao in acoes_diretas if acao.strip())
+    return segmentos
+
+
 def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
     """Preserva a estrutura mínima do PDF quando a IA não cobre um bloco."""
     categoria = bloco.get("categoria")
     linhas_fonte = [linha.strip() for linha in str(bloco.get("texto") or "").splitlines() if linha.strip()]
     if categoria == "anexo_documento" and linhas_fonte:
-        anexo = re.match(r"^ANEXO\s+([A-Z])$", linhas_fonte[0], re.IGNORECASE)
+        anexo = re.match(r"^ANEXO\s+([A-Z]\d*)\b\s*(.*)$", linhas_fonte[0], re.IGNORECASE)
         if anexo:
             identificador = f"Anexo {anexo.group(1).upper()}"
+            descricao = " ".join([anexo.group(2), *linhas_fonte[1:]]).strip()
             return [
                 MatrizLinha(
                     ordemBloco=bloco["ordem"],
                     itemPadrao=identificador,
-                    descricao="",
+                    descricao=descricao,
                     tipoTarefa="Padrão/Anexo",
-                ),
-                MatrizLinha(
-                    ordemBloco=bloco["ordem"],
-                    descricao=linhas_fonte[0],
-                    tipoTarefa="Título/Subtítulo",
-                ),
+                    descricaoTarefa=(f"{descricao} ({identificador.upper()})" if descricao else ""),
+                )
             ]
     if categoria == "anexo_cabecalho_repetido" and linhas_fonte:
         return [
@@ -564,6 +612,78 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
         ]
     if categoria in {"cabecalho_documento_repetido", "fragmento_interface"}:
         return [MatrizLinha(ordemBloco=bloco["ordem"], descricao="", tipoTarefa="Ignorar")]
+    if categoria == "etapa_operacional" and linhas_fonte:
+        descricao = " ".join(linhas_fonte)
+        partes = re.split(r"\s+(?=Essa\s+etapa\s+consiste\b)", descricao, maxsplit=1, flags=re.IGNORECASE)
+        linhas = [
+            MatrizLinha(
+                ordemBloco=bloco["ordem"],
+                descricao=partes[0],
+                tipoTarefa="Título/Subtítulo",
+            )
+        ]
+        if len(partes) > 1:
+            linhas.append(
+                MatrizLinha(
+                    ordemBloco=bloco["ordem"],
+                    descricao=partes[1],
+                    tipoTarefa="Informação",
+                )
+            )
+        return linhas
+    if categoria == "passo_tabela_operacional" and linhas_fonte:
+        correspondencia = re.match(
+            r"^\s*PASSO\s+\d+\s*\|\s*(.+)$",
+            str(bloco.get("texto") or ""),
+            re.IGNORECASE | re.DOTALL,
+        )
+        descricao = correspondencia.group(1).strip() if correspondencia else " ".join(linhas_fonte)
+        item_padrao = str(bloco.get("itemPadraoDetectado") or "")
+        partes_lista = [parte.strip() for parte in descricao.splitlines() if parte.strip()]
+        if len(partes_lista) > 1 and all(re.match(r"^[•-]\s+", parte) for parte in partes_lista[1:]):
+            linhas = [
+                MatrizLinha(
+                    ordemBloco=bloco["ordem"],
+                    itemPadrao=item_padrao,
+                    descricao=partes_lista[0],
+                    tipoTarefa="Título/Subtítulo",
+                )
+            ]
+            linhas.extend(
+                MatrizLinha(
+                    ordemBloco=bloco["ordem"],
+                    itemPadrao=item_padrao,
+                    descricao=re.sub(r"^[•-]\s+", "", parte),
+                    tipoTarefa="Execução",
+                    descricaoTarefa=_normalizar_acao_para_infinitivo(re.sub(r"^[•-]\s+", "", parte)),
+                )
+                for parte in partes_lista[1:]
+            )
+            return linhas
+        if re.match(r"^[A-Z0-9./-]+\s+dever[aá]\b", descricao, re.IGNORECASE):
+            return [
+                MatrizLinha(
+                    ordemBloco=bloco["ordem"],
+                    itemPadrao=item_padrao,
+                    descricao=descricao,
+                    tipoTarefa="Informação",
+                )
+            ]
+        segmentos = _segmentar_passo_operacional(descricao) or [("Execução", descricao)]
+        return [
+            MatrizLinha(
+                ordemBloco=bloco["ordem"],
+                itemPadrao=item_padrao,
+                descricao=descricao,
+                tipoTarefa=tipo_tarefa,
+                descricaoTarefa=(
+                    _normalizar_acao_para_infinitivo(acao)
+                    if tipo_tarefa == "Execução"
+                    else ""
+                ),
+            )
+            for tipo_tarefa, acao in segmentos
+        ]
     if (
         (
             bloco.get("tituloEstrutural")
@@ -609,6 +729,34 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
             )
         ]
     if categoria == "tabela_tecnica" and linhas_fonte:
+        if "|" in linhas_fonte[0]:
+            linhas_tabela: list[tuple[str, str]] = []
+            for linha_fonte in linhas_fonte:
+                conteudo = re.sub(r"^[•-]\s*", "", linha_fonte).strip()
+                if "|" in conteudo:
+                    chave, valor = (parte.strip() for parte in conteudo.split("|", maxsplit=1))
+                    linhas_tabela.append((chave, valor))
+                elif linhas_tabela:
+                    chave, valor = linhas_tabela[-1]
+                    linhas_tabela[-1] = (chave, f"{valor} {conteudo}".strip())
+            if linhas_tabela:
+                cabecalho = linhas_tabela[0]
+                cabecalho_semantico = all(
+                    termo in normalized_for_match(" ".join(cabecalho))
+                    for termo in ("QUEM", "O QUE")
+                )
+                return [
+                    MatrizLinha(
+                        ordemBloco=bloco["ordem"],
+                        descricao=f"{chave} - {valor}".strip(" -"),
+                        tipoTarefa=(
+                            "Título/Subtítulo"
+                            if indice == 0 and cabecalho_semantico
+                            else "Informação"
+                        ),
+                    )
+                    for indice, (chave, valor) in enumerate(linhas_tabela)
+                ]
         descricao = "\n".join(linhas_fonte) if bloco.get("listaAgrupada") else " ".join(linhas_fonte)
         partes = re.split(
             r"\s+(?=O set, ajustado\b)|\s+(?=Os sets podem ser alterados\b)",
@@ -650,7 +798,34 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
         ]
     if categoria == "instrucao_operacional":
         descricao = _texto_fonte_sem_item(bloco)
-        item_padrao = str(bloco.get("itemPadraoDetectado") or bloco.get("secaoContextual") or "")
+        item_detectado = str(bloco.get("itemPadraoDetectado") or "")
+        secao_contextual = str(bloco.get("secaoContextual") or "")
+        item_padrao = item_detectado or (
+            f"{secao_contextual.rstrip('.')}."
+            if bloco.get("anexoStandalone")
+            and re.fullmatch(r"\d+(?:\.\d+)*\.?", secao_contextual)
+            else secao_contextual
+        )
+        inicio_contextual = re.match(
+            r"^(?:Antes de|Após|Em caso|Caso|Se houver|Quando)\b",
+            descricao,
+            re.IGNORECASE,
+        )
+        if bloco.get("anexoStandalone") and inicio_contextual:
+            item_condicional = item_detectado or (
+                item_padrao
+                if len(secao_contextual.rstrip(".").split(".")) >= 2
+                else ""
+            )
+            return [
+                MatrizLinha(
+                    ordemBloco=bloco["ordem"],
+                    itemPadrao=item_condicional,
+                    descricao=descricao,
+                    tipoTarefa="Execução",
+                    descricaoTarefa=descricao,
+                )
+            ]
         acoes = (
             [_normalizar_acao_para_infinitivo(descricao)]
             if bloco.get("acaoUnica")
@@ -676,6 +851,19 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
             for acao in acoes
         ]
     linha = _criar_linha_de_fallback(bloco)
+    if categoria == "geral":
+        descricao = str(linha.descricao or "")
+        partes_alfabeticas = re.split(r"\s+(?=[a-z]\)\s+)", descricao, flags=re.IGNORECASE)
+        if len(partes_alfabeticas) >= 3 and len(partes_alfabeticas[0]) <= 120:
+            return [
+                MatrizLinha(
+                    ordemBloco=bloco["ordem"],
+                    descricao=parte.strip(),
+                    tipoTarefa="Título/Subtítulo" if indice == 0 else "Informação",
+                )
+                for indice, parte in enumerate(partes_alfabeticas)
+                if parte.strip()
+            ]
     if categoria in {"geral", "subsecao_numerada", "item_numerado_anexo"} and bloco.get("itemPadraoDetectado"):
         return [
             linha.model_copy(
@@ -729,6 +917,8 @@ def _bloco_tem_contrato_deterministico(bloco: dict[str, Any]) -> bool:
             "fragmento_interface",
             "item_numerado_anexo",
             "instrucao_operacional",
+            "etapa_operacional",
+            "passo_tabela_operacional",
         }
         or (categoria in {"como_fazer", "porque_fazer"} and bloco.get("contextoTarefa"))
     )

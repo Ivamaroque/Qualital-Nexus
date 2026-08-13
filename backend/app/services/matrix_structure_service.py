@@ -6,7 +6,7 @@ from app.utils.text_utils import normalized_for_match
 
 
 _NUMERIC_HTA_RE = re.compile(r"^\d+(?:\.\d+)*\.$")
-_ANEXO_ITEM_RE = re.compile(r"^ANEXO\s+[A-Z]\s*-\s*", re.IGNORECASE)
+_ANEXO_ITEM_RE = re.compile(r"^ANEXO\s+[A-Z]\d*\s*-\s*", re.IGNORECASE)
 _DOCUMENT_LIST_HEADING_RE = re.compile(
     r"\b(?:LISTA\s+DE\s+|SEGUINTES\s+)?(?:DOCUMENTOS|REFERENCIAS)"
     r"(?:\s+(?:DE\s+)?[A-Z0-9 ]+)?$"
@@ -14,6 +14,7 @@ _DOCUMENT_LIST_HEADING_RE = re.compile(
 _GENERIC_CONTAINER_TITLES = {
     "ATIVIDADE",
     "DESCRICAO",
+    "DETALHAMENTO DAS ATIVIDADES DO PROCESSO",
     "ETAPAS DE EXECUCAO DAS TAREFAS",
     "PROCEDIMENTO",
 }
@@ -29,10 +30,14 @@ def _item_para_hierarquia(valor: Any) -> str:
 
 def _descricao_tarefa_com_item(descricao: str, item: str) -> str:
     texto = " ".join(str(descricao or "").split()).strip()
-    item = _item_normalizado(item)
-    if not texto or not item or re.search(rf"\({re.escape(item)}\.?\)\s*$", texto):
+    item_exibicao = str(item or "").strip()
+    item_normalizado = _item_normalizado(item_exibicao)
+    if not texto or not item_normalizado or re.search(
+        rf"\({re.escape(item_normalizado)}\.?\)\s*$",
+        texto,
+    ):
         return texto
-    return f"{texto.rstrip()} ({item})"
+    return f"{texto.rstrip()} ({item_exibicao})"
 
 
 def _ancestral_operacional(
@@ -90,6 +95,94 @@ def _sufixo_local_do_grupo(item: str, grupo: str) -> str:
     return ""
 
 
+def _aplicar_hierarquia_do_anexo_standalone(
+    blocos_por_ordem: dict[int, dict[str, Any]],
+    resultado: list[dict[str, Any]],
+    titulos_por_item: dict[str, dict[str, Any]],
+    raiz_inicial: int,
+) -> None:
+    """Numera anexos em arquivos próprios sem misturar seus itens com o documento principal."""
+    ordens_standalone = {
+        ordem
+        for ordem, bloco in blocos_por_ordem.items()
+        if bloco.get("anexoStandalone")
+    }
+    if not ordens_standalone:
+        return
+
+    for linha in resultado:
+        if linha.get("ordemBloco") in ordens_standalone and linha.get("tipoTarefa") == "Padrão/Anexo":
+            linha["subtarefaHTA"] = f"{raiz_inicial}."
+            if not linha.get("descricaoTarefa"):
+                linha["descricaoTarefa"] = _descricao_tarefa_com_item(
+                    str(linha.get("descricao") or ""),
+                    str(linha.get("itemPadrao") or ""),
+                )
+            break
+
+    grupos: list[str] = []
+    for linha in resultado:
+        ordem = linha.get("ordemBloco")
+        bloco = blocos_por_ordem.get(int(ordem)) if str(ordem or "").isdigit() else None
+        if not bloco or not bloco.get("anexoStandalone") or linha.get("tipoTarefa") != "Execução":
+            continue
+        grupo = _item_para_hierarquia(bloco.get("secaoContextual"))
+        if grupo and grupo not in grupos:
+            grupos.append(grupo)
+    if not grupos:
+        return
+
+    def grupo_superior(grupo: str) -> str:
+        partes = grupo.split(".")
+        return ".".join(partes[:2]) if len(partes) >= 2 else grupo
+
+    superiores: list[str] = []
+    subgrupos: defaultdict[str, list[str]] = defaultdict(list)
+    for grupo in grupos:
+        superior = grupo_superior(grupo)
+        if superior not in superiores:
+            superiores.append(superior)
+        if grupo != superior and grupo not in subgrupos[superior]:
+            subgrupos[superior].append(grupo)
+
+    prefixos: dict[str, str] = {}
+    for indice_superior, superior in enumerate(superiores, start=1):
+        prefixos[superior] = f"{raiz_inicial}.{indice_superior}"
+        titulo_superior = titulos_por_item.get(superior)
+        if titulo_superior:
+            titulo_superior["subtarefaHTA"] = f"{prefixos[superior]}."
+            titulo_superior["descricaoTarefa"] = _descricao_tarefa_com_item(
+                str(titulo_superior.get("descricao") or ""),
+                str(titulo_superior.get("itemPadrao") or superior),
+            )
+        for indice_subgrupo, subgrupo in enumerate(subgrupos[superior], start=1):
+            prefixos[subgrupo] = f"{prefixos[superior]}.{indice_subgrupo}"
+            titulo_subgrupo = titulos_por_item.get(subgrupo)
+            if titulo_subgrupo:
+                titulo_subgrupo["subtarefaHTA"] = f"{prefixos[subgrupo]}."
+                titulo_subgrupo["descricaoTarefa"] = _descricao_tarefa_com_item(
+                    str(titulo_subgrupo.get("descricao") or ""),
+                    str(titulo_subgrupo.get("itemPadrao") or subgrupo),
+                )
+
+    contadores: defaultdict[str, int] = defaultdict(int)
+    for linha in resultado:
+        ordem = linha.get("ordemBloco")
+        bloco = blocos_por_ordem.get(int(ordem)) if str(ordem or "").isdigit() else None
+        if not bloco or not bloco.get("anexoStandalone") or linha.get("tipoTarefa") != "Execução":
+            continue
+        grupo = _item_para_hierarquia(bloco.get("secaoContextual"))
+        prefixo = prefixos.get(grupo) or prefixos.get(grupo_superior(grupo))
+        if not prefixo:
+            continue
+        contadores[grupo] += 1
+        linha["subtarefaHTA"] = f"{prefixo}.{contadores[grupo]}."
+        linha["descricaoTarefa"] = _descricao_tarefa_com_item(
+            str(linha.get("descricaoTarefa") or ""),
+            str(linha.get("itemPadrao") or ""),
+        )
+
+
 def _aplicar_hierarquia_do_anexo(
     blocos_por_ordem: dict[int, dict[str, Any]],
     resultado: list[dict[str, Any]],
@@ -104,7 +197,11 @@ def _aplicar_hierarquia_do_anexo(
     }
     grupos: list[str] = []
     for ordem, bloco in blocos_por_ordem.items():
-        if ordem not in ordens_com_execucao or not str(bloco.get("escopo") or "").startswith("anexo_"):
+        if (
+            ordem not in ordens_com_execucao
+            or bloco.get("anexoStandalone")
+            or not str(bloco.get("escopo") or "").startswith("anexo_")
+        ):
             continue
         grupo = _item_para_hierarquia(bloco.get("secaoContextual"))
         if grupo and grupo not in grupos:
@@ -153,7 +250,11 @@ def _aplicar_hierarquia_do_anexo(
     for linha in resultado:
         ordem = linha.get("ordemBloco")
         bloco = blocos_por_ordem.get(int(ordem)) if str(ordem or "").isdigit() else None
-        if not bloco or not str(bloco.get("escopo") or "").startswith("anexo_"):
+        if (
+            not bloco
+            or bloco.get("anexoStandalone")
+            or not str(bloco.get("escopo") or "").startswith("anexo_")
+        ):
             continue
         grupo = _item_para_hierarquia(bloco.get("secaoContextual"))
         prefixo = prefixos.get(grupo)
@@ -201,6 +302,30 @@ def consolidar_hierarquia_tarefas(
         if item and linha.get("tipoTarefa") == "Título/Subtítulo":
             titulos_por_item[item] = linha
 
+    titulos_operacionais_por_grupo: dict[str, dict[str, Any]] = {}
+    for linha in resultado:
+        ordem = linha.get("ordemBloco")
+        bloco = blocos_por_ordem.get(int(ordem)) if str(ordem or "").isdigit() else None
+        if not bloco or linha.get("tipoTarefa") != "Título/Subtítulo":
+            continue
+        if bloco.get("categoria") != "etapa_operacional" or int(bloco.get("etapaOperacional") or 0) <= 1:
+            continue
+        grupo = (
+            f"__etapa_{int(bloco['etapaOperacional'])}_"
+            f"{_item_para_hierarquia(bloco.get('secaoContextual'))}"
+        )
+        secao_fonte = str(bloco.get("secaoContextual") or "").strip().rstrip(".")
+        if secao_fonte:
+            linha["itemPadrao"] = f"{secao_fonte}."
+        titulos_operacionais_por_grupo[grupo] = linha
+
+    _aplicar_hierarquia_do_anexo_standalone(
+        blocos_por_ordem,
+        resultado,
+        titulos_por_item,
+        raiz_inicial,
+    )
+
     _aplicar_hierarquia_do_anexo(
         blocos_por_ordem,
         resultado,
@@ -233,20 +358,26 @@ def consolidar_hierarquia_tarefas(
             continue
 
         contexto = bloco.get("contextoTarefa") or {}
-        item = _item_normalizado(
+        item_exibicao = str(
             linha.get("itemPadrao")
             or contexto.get("itemPadrao")
             or bloco.get("itemPadraoDetectado")
             or bloco.get("secaoContextual")
-        )
-        linha["itemPadrao"] = item
+            or ""
+        ).strip()
+        item = _item_normalizado(item_exibicao)
+        linha["itemPadrao"] = item_exibicao
 
         hta_atual = str(linha.get("subtarefaHTA") or "").strip()
         if _NUMERIC_HTA_RE.fullmatch(hta_atual):
-            linha["descricaoTarefa"] = _descricao_tarefa_com_item(str(linha.get("descricaoTarefa") or ""), item)
+            linha["descricaoTarefa"] = _descricao_tarefa_com_item(
+                str(linha.get("descricaoTarefa") or ""),
+                item_exibicao,
+            )
             continue
 
-        secao = _item_para_hierarquia(bloco.get("secaoContextual") or item)
+        grupo_operacional = _item_para_hierarquia(contexto.get("grupoOperacional"))
+        secao = grupo_operacional or _item_para_hierarquia(bloco.get("secaoContextual") or item)
         # Tarefas sem numeração/contexto não podem compartilhar uma HTA por acidente.
         raiz = (
             _ancestral_operacional(secao, titulos_por_item)
@@ -257,11 +388,19 @@ def consolidar_hierarquia_tarefas(
         if raiz not in numero_raiz:
             numero_raiz[raiz] = proxima_raiz
             proxima_raiz += 1
-            titulo_raiz = titulos_por_item.get(raiz)
+            titulo_raiz = titulos_por_item.get(raiz) or titulos_operacionais_por_grupo.get(raiz)
             if titulo_raiz:
                 titulo_raiz["subtarefaHTA"] = f"{numero_raiz[raiz]}."
+                descricao_titulo = str(titulo_raiz.get("descricao") or "")
+                if raiz.startswith("__etapa_"):
+                    descricao_titulo = re.sub(
+                        r"^ETAPA\s+\d+\s*[-–—:]\s*",
+                        "",
+                        descricao_titulo,
+                        flags=re.IGNORECASE,
+                    ).strip()
                 titulo_raiz["descricaoTarefa"] = _descricao_tarefa_com_item(
-                    str(titulo_raiz.get("descricao") or ""),
+                    descricao_titulo,
                     str(titulo_raiz.get("itemPadrao") or raiz),
                 )
 
@@ -287,6 +426,9 @@ def consolidar_hierarquia_tarefas(
         chave_contador = (raiz, subsecao)
         contador_acao[chave_contador] += 1
         linha["subtarefaHTA"] = f"{prefixo}{contador_acao[chave_contador]}."
-        linha["descricaoTarefa"] = _descricao_tarefa_com_item(str(linha.get("descricaoTarefa") or ""), item)
+        linha["descricaoTarefa"] = _descricao_tarefa_com_item(
+            str(linha.get("descricaoTarefa") or ""),
+            item_exibicao,
+        )
 
     return resultado

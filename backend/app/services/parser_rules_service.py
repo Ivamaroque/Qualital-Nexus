@@ -11,6 +11,7 @@ _RULE_FIELDS = "id,nome,descricao,ordem,escopo,padrao_regex,tipo_tarefa,categori
 _MAX_RULE_TEXT_LENGTH = 12_000
 _CATEGORY_ALIASES = {
     "atividade_tabela": {"atividade_tabela_2", "atividade_anomalia"},
+    "anexo_documento": {"anexo"},
 }
 
 
@@ -28,12 +29,18 @@ def buscar_parser_rules() -> list[dict[str, Any]]:
 
 
 def filtrar_regras_por_bloco(regras: list[dict[str, Any]], escopo: str, categoria: str) -> list[dict[str, Any]]:
+    def escopo_compativel(escopo_regra: Any) -> bool:
+        return bool(
+            escopo_regra in {"geral", escopo}
+            or (escopo_regra == "anexo" and str(escopo).startswith("anexo_"))
+        )
+
     compativeis = [
         regra
         for regra in regras
-        if regra.get("escopo") in {"geral", escopo}
+        if escopo_compativel(regra.get("escopo"))
         and (
-            regra.get("escopo") == escopo
+            regra.get("escopo") in {escopo, "anexo"}
             or regra.get("categoria") in {None, "", "geral", categoria}
         )
     ]

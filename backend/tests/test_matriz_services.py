@@ -878,6 +878,266 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertNotIn("Boletim\n", texto)
         self.assertIn("COMO FAZER: Alinhar.\n\nPORQUE FAZER: Garantir fluxo.", texto)
 
+    def test_pass_description_table_preserves_steps_and_continuations(self):
+        class TabelaFalsa:
+            def extract(self):
+                return [
+                    ["PASSO", "DESCRIÇÃO", "RESP."],
+                    ["1", "Abrir a válvula e confirmar a pressão", "O4"],
+                    [None, "antes de prosseguir.", None],
+                    ["2", "Fechar a válvula.", "O4"],
+                    [None, "Realizar abertura das válvulas", None],
+                    ["3", None, None],
+                    [None, "e confirmar o alinhamento.", None],
+                ]
+
+        texto = _serializar_tabela(TabelaFalsa())
+
+        self.assertIn("PASSO 1 | Abrir a válvula e confirmar a pressão antes de prosseguir.", texto)
+        self.assertIn("PASSO 2 | Fechar a válvula.", texto)
+        self.assertIn("PASSO 3 | Realizar abertura das válvulas e confirmar o alinhamento.", texto)
+        self.assertNotIn("RESP", texto)
+        self.assertNotIn("O4", texto)
+
+    def test_numeric_technical_table_is_not_treated_as_operational_steps(self):
+        class TabelaFalsa:
+            def extract(self):
+                return [["1", "10 bar"], ["2", "20 bar"]]
+
+        texto = _serializar_tabela(TabelaFalsa())
+
+        self.assertNotIn("PASSO", texto)
+        self.assertIn("1 | 10 bar", texto)
+
+    def test_operational_step_keeps_coordinated_actions_in_the_same_task(self):
+        bloco = {
+            "ordem": 1,
+            "texto": "PASSO 7 | Alinhar a chegada do riser e abrir a válvula XV-01.",
+            "categoria": "passo_tabela_operacional",
+            "itemPadraoDetectado": "3.2.2.7.",
+        }
+
+        linhas = _criar_linhas_de_fallback(bloco)
+
+        self.assertEqual([linha.tipoTarefa for linha in linhas], ["Execução"])
+        self.assertEqual(
+            [linha.descricaoTarefa for linha in linhas],
+            ["Alinhar a chegada do riser e abrir a válvula XV-01."],
+        )
+
+    def test_informational_table_preserves_header_and_rows(self):
+        bloco = {
+            "ordem": 1,
+            "texto": (
+                "• Quem | O que\n"
+                "• COOP | Garantir o cronograma.\n"
+                "• O4 | Executar as atividades.\n"
+                "• Informar qualquer anormalidade."
+            ),
+            "categoria": "tabela_tecnica",
+            "listaAgrupada": True,
+        }
+
+        linhas = _criar_linhas_de_fallback(bloco)
+
+        self.assertEqual(
+            [linha.tipoTarefa for linha in linhas],
+            ["Título/Subtítulo", "Informação", "Informação"],
+        )
+        self.assertEqual(linhas[0].descricao, "Quem - O que")
+        self.assertIn("Informar qualquer anormalidade", linhas[-1].descricao)
+
+    def test_standalone_annex_keeps_conditional_actions_as_complete_rows(self):
+        texto = limpar_texto_pdf(
+            "2. Ações imediatas e corretivas\n"
+            "\uf0b7 Caso haja vazamento, fechar a válvula e informar ao SUOP; "
+            "\uf0b7 Após despressurização, abortar a operação e comunicar ao SUOP."
+        )
+        blocos = separar_blocos(texto, "Anexo A1 - Processo.pdf")
+        linhas = [
+            linha
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+            if linha.tipoTarefa == "Execução"
+        ]
+
+        self.assertEqual(len(linhas), 2)
+        self.assertTrue(all(not linha.itemPadrao for linha in linhas))
+        self.assertIn("fechar a válvula e informar ao SUOP", linhas[0].descricaoTarefa)
+        self.assertIn("abortar a operação e comunicar ao SUOP", linhas[1].descricaoTarefa)
+
+    def test_standalone_annex_distinguishes_critical_check_from_maintenance_note(self):
+        texto = limpar_texto_pdf(
+            "1.2. Preparação do equipamento\n\n"
+            "1.2.1. Itens Críticos para Verificação\n\n"
+            "Antes de iniciar a preparação, verificar as válvulas conforme a Tabela 1.\n\n"
+            "1.8. Retirada do equipamento\n\n"
+            "1.8.1. Itens Críticos para Verificação\n\n"
+            "Em caso de manutenção da unidade hidráulica, suspender atividade e informar ao SUOP."
+        )
+        blocos = separar_blocos(texto, "Anexo A1 - Processo.pdf")
+        linhas_por_texto = {
+            bloco["texto"]: _criar_linhas_de_fallback(bloco)
+            for bloco in blocos
+        }
+
+        verificacao = next(
+            linhas
+            for texto_bloco, linhas in linhas_por_texto.items()
+            if texto_bloco.startswith("Antes de iniciar")
+        )
+        manutencao = next(
+            linhas
+            for texto_bloco, linhas in linhas_por_texto.items()
+            if texto_bloco.startswith("Em caso de manutenção")
+        )
+
+        self.assertEqual(verificacao[0].tipoTarefa, "Execução")
+        self.assertEqual(verificacao[0].itemPadrao, "1.2.1.")
+        self.assertEqual(manutencao[0].tipoTarefa, "Informação")
+
+    def test_operational_photo_list_keeps_title_and_each_photo(self):
+        blocos = separar_blocos(
+            "3.2.2. Sequência das atividades\n"
+            "ETAPA 1 - Operação\n"
+            "PASSO 13 | Observação: Realizar registros fotográficos:\n"
+            "- Foto da tampa aberta.\n"
+            "- Foto do equipamento fechado."
+        )
+        bloco_fotos = next(bloco for bloco in blocos if "Foto da tampa" in bloco["texto"])
+        linhas = _criar_linhas_de_fallback(bloco_fotos)
+
+        self.assertEqual(bloco_fotos["categoria"], "passo_tabela_operacional")
+        self.assertEqual(
+            [linha.tipoTarefa for linha in linhas],
+            ["Título/Subtítulo", "Execução", "Execução"],
+        )
+
+    def test_reference_to_table_continues_an_open_sentence(self):
+        blocos = separar_blocos(
+            "1.2.1. Itens críticos\n"
+            "Antes de iniciar, verificar conforme indicado na\n\n"
+            "Tabela 1 e ilustrado pela Figura 1."
+        )
+
+        texto_completo = next(bloco["texto"] for bloco in blocos if "Antes de iniciar" in bloco["texto"])
+
+        self.assertIn("indicado na Tabela 1", texto_completo)
+
+    def test_standalone_alphanumeric_annex_uses_filename_and_local_hierarchy(self):
+        blocos = separar_blocos(
+            "PROCESSO DE LANÇAMENTO DE PIG\n"
+            "1- Etapas de execução da atividade\n"
+            "1.1 - Recursos necessários\n"
+            "- Fita zebrada;\n"
+            "1.2. Despressurização e Drenagem\n"
+            "• a. Isolar a área com fita zebrada;\n"
+            "• b. Confirmar o fechamento da válvula.",
+            "Anexo B1 - Processo de Lançamento de PIG.pdf",
+        )
+        linhas = [
+            linha.model_dump()
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+
+        consolidadas = consolidar_hierarquia_tarefas(blocos, linhas, raiz_inicial=6)
+        padrao = next(linha for linha in consolidadas if linha["tipoTarefa"] == "Padrão/Anexo")
+        execucoes = [linha for linha in consolidadas if linha["tipoTarefa"] == "Execução"]
+        titulo = next(linha for linha in consolidadas if linha["itemPadrao"] == "1.2.")
+
+        self.assertEqual(padrao["itemPadrao"], "Anexo B1")
+        self.assertEqual(padrao["descricao"], "PROCESSO DE LANÇAMENTO DE PIG")
+        self.assertEqual(padrao["subtarefaHTA"], "6.")
+        self.assertEqual(titulo["subtarefaHTA"], "6.1.")
+        self.assertEqual([linha["itemPadrao"] for linha in execucoes], ["1.2.(a)", "1.2.(b)"])
+        self.assertEqual([linha["subtarefaHTA"] for linha in execucoes], ["6.1.1.", "6.1.2."])
+
+    def test_operational_stages_restart_hta_without_changing_source_item(self):
+        blocos = separar_blocos(
+            "3.2.2. Sequência das atividades\n"
+            "ETAPA 1 - Lançamento de PIG\n"
+            "Essa etapa consiste na primeira metade.\n"
+            "PASSO 1 | Abrir a válvula.\n"
+            "ETAPA 2 - Recebimento de PIG\n"
+            "Essa etapa consiste na segunda metade.\n"
+            "PASSO 1 | Fechar a válvula."
+        )
+        linhas = [
+            linha.model_dump()
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+
+        consolidadas = consolidar_hierarquia_tarefas(blocos, linhas)
+        execucoes = [linha for linha in consolidadas if linha["tipoTarefa"] == "Execução"]
+        titulos_com_hta = [
+            linha for linha in consolidadas
+            if linha["tipoTarefa"] == "Título/Subtítulo" and linha["subtarefaHTA"]
+        ]
+
+        self.assertEqual([linha["itemPadrao"] for linha in execucoes], ["3.2.2.1.", "3.2.2.1."])
+        self.assertTrue(all("(3.2.2.1.)" in linha["descricaoTarefa"] for linha in execucoes))
+        self.assertEqual([linha["subtarefaHTA"] for linha in execucoes], ["1.1.", "2.1."])
+        self.assertEqual([linha["subtarefaHTA"] for linha in titulos_com_hta], ["1.", "2."])
+
+    def test_operational_responsibility_cells_are_not_exported(self):
+        blocos = separar_blocos(
+            "3.2.2. Sequência das atividades\n"
+            "ETAPA 1 - Lançamento\n"
+            "PASSO 1 | Abrir a válvula.\n\n"
+            "RESP.\n\nOP-PRA1\n\nBarco de Apoio\n\nCIOP\n\nFSO-CIMA"
+        )
+
+        fragmentos = [bloco for bloco in blocos if bloco["categoria"] == "fragmento_interface"]
+
+        self.assertEqual(len(fragmentos), 5)
+        linhas_fragmento = [
+            linha
+            for bloco in fragmentos
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+        self.assertTrue(all(linha.tipoTarefa == "Ignorar" and not linha.descricao for linha in linhas_fragmento))
+
+    def test_standalone_annex_groups_dotted_checklist_and_keeps_remission_as_information(self):
+        blocos = separar_blocos(
+            "1.3. PREPARAÇÃO\n"
+            "1.3.1. PREMISSAS\n"
+            "1.3.1.1 - Seguir Etapa 1.6. Pressurização.\n"
+            "a. Pressão normalizada..............................................\n"
+            "b. Válvula alinhada................................................",
+            "Anexo A1 - Processo.pdf",
+        )
+        linhas = [
+            linha.model_dump()
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+
+        remissao = next(linha for linha in linhas if "Seguir Etapa" in linha["descricao"])
+        checklist = next(linha for linha in linhas if "Pressão normalizada" in linha["descricao"])
+
+        self.assertEqual(remissao["tipoTarefa"], "Informação")
+        self.assertEqual(checklist["tipoTarefa"], "Informação")
+        self.assertIn("Válvula alinhada", checklist["descricao"])
+
+    def test_conditional_annex_instruction_with_communicate_is_execution(self):
+        blocos = separar_blocos(
+            "1.7. SITUAÇÕES ANORMAIS\n"
+            "1.7.1 Caso seja necessário, comunicar ao supervisor.\n"
+            "1.7.2 Fechar a válvula.",
+            "Anexo B1 - Processo.pdf",
+        )
+        linhas = [
+            linha.model_dump()
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+
+        execucoes = [linha for linha in linhas if linha["tipoTarefa"] == "Execução"]
+
+        self.assertEqual([linha["itemPadrao"] for linha in execucoes], ["1.7.1", "1.7.2"])
+
     def test_structural_blocks_bypass_ai_and_keep_title_and_content_separate(self):
         blocos = separar_blocos("1. OBJETIVO\nDescrever o processo.")
 
@@ -941,6 +1201,20 @@ class MatrizServicesTest(unittest.TestCase):
         selecionadas = filtrar_regras_por_bloco(regras, "anexo_b", "anexo")
 
         self.assertEqual([regra["id"] for regra in selecionadas], [2, 1, 3])
+
+    def test_generic_annex_rule_applies_to_alphanumeric_annex_scope(self):
+        regras = [
+            {"id": 1, "escopo": "geral", "categoria": "geral", "ordem": 1},
+            {"id": 2, "escopo": "anexo", "categoria": "anexo_documento", "ordem": 2},
+        ]
+
+        selecionadas = filtrar_regras_por_bloco(
+            regras,
+            "anexo_arquivo_b1",
+            "anexo_documento",
+        )
+
+        self.assertEqual([regra["id"] for regra in selecionadas], [2, 1])
 
 
 if __name__ == "__main__":
