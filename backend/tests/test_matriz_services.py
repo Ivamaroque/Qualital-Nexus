@@ -4,6 +4,7 @@ import logging
 import struct
 import sys
 import unittest
+import zipfile
 from asyncio import run
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,7 @@ from starlette.datastructures import UploadFile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.csv_service import CSV_COLUMNS, gerar_csv_matriz
+from app.services.xlsx_service import XLSX_COLUMNS, gerar_xlsx_matriz
 from app.services.document_service import (
     _extrair_texto_doc,
     extrair_texto_documento,
@@ -966,6 +968,31 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertIn("fechar a válvula e informar ao SUOP", linhas[0].descricaoTarefa)
         self.assertIn("abortar a operação e comunicar ao SUOP", linhas[1].descricaoTarefa)
 
+    def test_standalone_annex_splits_conditional_bullets_extracted_on_one_line(self):
+        bloco = {
+            "ordem": 1,
+            "texto": (
+                "• Caso haja vazamento, fechar a válvula e informar ao SUOP; "
+                "• Após despressurização, abortar a operação e comunicar ao SUOP."
+            ),
+            "categoria": "instrucao_operacional",
+            "anexoStandalone": True,
+            "secaoContextual": "2",
+        }
+
+        linhas = _criar_linhas_de_fallback(bloco)
+
+        self.assertEqual(len(linhas), 2)
+        self.assertEqual(
+            [linha.descricao for linha in linhas],
+            [
+                "Caso haja vazamento, fechar a válvula e informar ao SUOP",
+                "Após despressurização, abortar a operação e comunicar ao SUOP.",
+            ],
+        )
+        self.assertTrue(all(linha.tipoTarefa == "Execução" for linha in linhas))
+        self.assertTrue(all(not linha.itemPadrao for linha in linhas))
+
     def test_standalone_annex_distinguishes_critical_check_from_maintenance_note(self):
         texto = limpar_texto_pdf(
             "1.2. Preparação do equipamento\n\n"
@@ -1215,6 +1242,135 @@ class MatrizServicesTest(unittest.TestCase):
         )
 
         self.assertEqual([regra["id"] for regra in selecionadas], [2, 1])
+
+    def test_doc_extension_accepts_docx_package_from_reference_files(self):
+        documento = Document()
+        documento.add_paragraph("1. OBJETIVO")
+        documento.add_paragraph("Executar a rotina.")
+        arquivo = io.BytesIO()
+        documento.save(arquivo)
+
+        texto = extrair_texto_documento(arquivo.getvalue(), "referencia.DOC")
+
+        self.assertIn("Executar a rotina.", texto)
+
+    def test_prefixed_annex_filename_creates_standalone_scope(self):
+        blocos = separar_blocos(
+            "PROCESSO DE MANOBRA\n"
+            "1 - Verificar a condição do equipamento.",
+            "7_10 Anexo M5 - Operação e Manutenção.pdf",
+        )
+
+        self.assertEqual(blocos[0]["categoria"], "anexo_documento")
+        self.assertEqual(blocos[0]["escopo"], "anexo_arquivo_m5")
+        self.assertTrue(blocos[0]["anexoStandalone"])
+
+    def test_fluxogram_states_are_filtered_but_actions_are_preserved(self):
+        blocos = separar_blocos(
+            "SIM\n"
+            "Resp:\n"
+            "Acionar o alarme geral de emergência.",
+            "ANEXO E - Fluxograma - Exportação.pdf",
+        )
+
+        self.assertEqual(blocos[0]["categoria"], "anexo_documento")
+        self.assertEqual(blocos[1]["categoria"], "fragmento_interface")
+        self.assertEqual(blocos[2]["categoria"], "instrucao_operacional")
+        self.assertTrue(all(bloco["tipoDocumento"] == "fluxograma" for bloco in blocos))
+
+    def test_fragmento_interface_is_ignored_without_remote_rules(self):
+        linhas = _criar_linhas_de_fallback({
+            "ordem": 1,
+            "texto": "SIM",
+            "categoria": "fragmento_interface",
+        })
+
+        self.assertEqual(linhas[0].tipoTarefa, "Ignorar")
+        self.assertEqual(normalizar_linhas([linha.model_dump() for linha in linhas]), [])
+
+    def test_instruction_items_with_hyphen_are_exported_one_per_line(self):
+        bloco = {
+            "ordem": 1,
+            "texto": (
+                "Sempre que houver analises, verificar os valores conforme referencia:\n"
+                "- Verificacao da quantidade de liners alinhados.\n"
+                "- Verificacao da razao do diferencial.\n"
+                "- Realizar operacao de retrolavagem."
+            ),
+            "categoria": "instrucao_operacional",
+            "secaoContextual": "3.3.2.4.",
+        }
+
+        linhas = _criar_linhas_de_fallback(bloco)
+
+        self.assertEqual(len(linhas), 4)
+        self.assertTrue(linhas[1].descricao.startswith("- Verificacao"))
+        self.assertTrue(linhas[2].descricao.startswith("- Verificacao"))
+        self.assertEqual(linhas[-1].tipoTarefa, "Execu\u00e7\u00e3o")
+
+    def test_inline_alphabetical_items_are_separated_and_keep_local_item(self):
+        bloco = {
+            "ordem": 1,
+            "texto": "a) Isolar a area; b) Confirmar o fechamento da valvula.",
+            "categoria": "instrucao_operacional",
+            "secaoContextual": "3.2.4.",
+        }
+
+        linhas = _criar_linhas_de_fallback(bloco)
+
+        self.assertEqual(
+            [linha.itemPadrao for linha in linhas],
+            ["3.2.4.(a)", "3.2.4.(b)"],
+        )
+        self.assertEqual(len(linhas), 2)
+        self.assertTrue(linhas[0].descricao.startswith("a)"))
+        self.assertTrue(linhas[1].descricao.startswith("b)"))
+
+    def test_informational_hyphen_list_is_exported_one_per_line(self):
+        bloco = {
+            "ordem": 1,
+            "texto": "- Lanterna;\n- Radio;\n- Veiculo.",
+            "categoria": "lista_informativa",
+            "listaAgrupada": True,
+        }
+
+        linhas = _criar_linhas_de_fallback(bloco)
+
+        self.assertEqual(len(linhas), 3)
+        self.assertEqual(
+            [linha.descricao for linha in linhas],
+            ["- Lanterna;", "- Radio;", "- Veiculo."],
+        )
+
+    def test_xlsx_matrix_uses_reference_columns_and_is_a_valid_package(self):
+        conteudo = gerar_xlsx_matriz(
+            [
+                {
+                    "subtarefaHTA": "1.1.",
+                    "itemPadrao": "1.1.",
+                    "descricao": "Verificar a pressão.",
+                    "tipoTarefa": "Execução",
+                    "descricaoTarefa": "Verificar a pressão. (1.1.)",
+                }
+            ]
+        )
+
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as pacote:
+            self.assertIn("xl/worksheets/sheet1.xml", pacote.namelist())
+            self.assertIn("xl/styles.xml", pacote.namelist())
+            self.assertIn("Subtarefa (HTA)", pacote.read("xl/worksheets/sheet1.xml").decode("utf-8"))
+
+        self.assertEqual(
+            XLSX_COLUMNS,
+            (
+                "Subtarefa (HTA)",
+                "Item (Padrão)",
+                "Descrição da tarefa (Padrão)",
+                "Tipo da tarefa",
+                "ID da Subtarefa",
+                "Descrição da tarefa (HTA)",
+            ),
+        )
 
 
 if __name__ == "__main__":

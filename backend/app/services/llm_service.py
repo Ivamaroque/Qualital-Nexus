@@ -56,6 +56,10 @@ _TIPOS_TAREFA_POR_CATEGORIA = {
     "atividade_anomalia": "Informação",
     "como_fazer": "Execução",
     "porque_fazer": "Informação",
+    "fragmento_interface": "Ignorar",
+    "cabecalho_documento_repetido": "Ignorar",
+    "anexo_cabecalho_repetido": "Ignorar",
+    "cabecalho_tabela": "Ignorar",
 }
 _PALAVRAS_GENERICAS = {
     "atividade", "bloco", "contrato", "csv", "documento", "matriz", "numerada",
@@ -584,6 +588,109 @@ def _segmentar_passo_operacional(texto: str) -> list[tuple[str, str]]:
     return segmentos
 
 
+_INICIO_INSTRUCAO_CONDICIONAL_RE = r"(?:Antes de|Após|Em caso|Caso|Se houver|Quando)\b"
+_BULLET_CONDICIONAL_RE = re.compile(
+    rf"\s*(?:;\s*)?[•·▪◦]\s*(?={_INICIO_INSTRUCAO_CONDICIONAL_RE})",
+    re.IGNORECASE,
+)
+
+
+def _separar_instrucoes_condicionais(texto: str) -> list[str]:
+    """Separa bullets condicionais sem quebrar as ações coordenadas de cada bullet."""
+    descricao = re.sub(r"^\s*[•·▪◦]\s*", "", texto).strip()
+    instrucoes = [parte.strip(" ;") for parte in _BULLET_CONDICIONAL_RE.split(descricao)]
+    return [instrucao for instrucao in instrucoes if instrucao]
+
+
+_LISTA_MARCADOR_RE = re.compile(
+    r"(?:^|(?<=\n)|(?<=:)|(?<=;))\s*(?P<marcador>[-\u2013\u2014\u2022\u00b7\u25aa\u25e6*]|[a-z][.)])\s+",
+    re.IGNORECASE | re.MULTILINE,
+)
+_LISTA_MARCADORES_BULLET = frozenset(
+    {"-", "\u2013", "\u2014", "\u2022", "\u00b7", "\u25aa", "\u25e6", "*"}
+)
+
+
+def _normalizar_linha_lista(valor: str) -> str:
+    return " ".join(str(valor or "").split())
+
+
+def _separar_itens_lineares(linhas_fonte: list[str]) -> list[tuple[str, str, str]]:
+    """Separa listas lineares sem reescrever o texto extraido."""
+    texto = "\n".join(
+        _normalizar_linha_lista(linha)
+        for linha in linhas_fonte
+        if _normalizar_linha_lista(linha)
+    )
+    if not texto:
+        return []
+
+    correspondencias = list(_LISTA_MARCADOR_RE.finditer(texto))
+    if not correspondencias:
+        texto_normalizado = _normalizar_linha_lista(texto)
+        return [("", texto_normalizado, texto_normalizado)]
+
+    segmentos: list[tuple[str, str, str]] = []
+
+    def adicionar_segmento(marcador: str, corpo: str) -> None:
+        corpo = _normalizar_linha_lista(corpo)
+        if not corpo:
+            return
+        partes = re.split(
+            r"\s+(?=[a-z][.)]\s+)",
+            corpo,
+            flags=re.IGNORECASE,
+        )
+        if len(partes) > 1 and all(
+            re.match(r"^[a-z][.)]\s+", parte, re.IGNORECASE)
+            for parte in partes[1:]
+        ):
+            adicionar_segmento(marcador, partes[0])
+            for parte in partes[1:]:
+                letra = re.match(r"^([a-z])[.)]\s+", parte, re.IGNORECASE)
+                adicionar_segmento(letra.group(1) if letra else "", parte)
+            return
+
+        marcador_limpo = marcador.strip()
+        marcador_aninhado = re.match(
+            r"^([a-z])\s*[.)]\s+",
+            corpo,
+            re.IGNORECASE,
+        )
+        if marcador_limpo in _LISTA_MARCADORES_BULLET and marcador_aninhado:
+            marcador_item = marcador_aninhado.group(1).lower()
+            texto_acao = corpo[marcador_aninhado.end():].strip()
+        elif re.fullmatch(r"[a-z][.)]", marcador_limpo, re.IGNORECASE):
+            marcador_item = marcador_limpo[0].lower()
+            texto_acao = corpo
+        else:
+            marcador_item = ""
+            texto_acao = corpo
+        segmentos.append(
+            (
+                marcador_item,
+                f"{marcador_limpo} {corpo}".strip(),
+                texto_acao,
+            )
+        )
+
+    prefixo = _normalizar_linha_lista(texto[:correspondencias[0].start()])
+    if prefixo:
+        segmentos.append(("", prefixo, prefixo))
+
+    for indice, correspondencia in enumerate(correspondencias):
+        fim = (
+            correspondencias[indice + 1].start()
+            if indice + 1 < len(correspondencias)
+            else len(texto)
+        )
+        adicionar_segmento(
+            correspondencia.group("marcador"),
+            texto[correspondencia.end():fim],
+        )
+    return segmentos
+
+
 def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
     """Preserva a estrutura mínima do PDF quando a IA não cobre um bloco."""
     categoria = bloco.get("categoria")
@@ -796,6 +903,18 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
             )
             for indice, acao in enumerate(acoes, start=1)
         ]
+    if linhas_fonte and categoria == "lista_informativa":
+        itens_lineares = _separar_itens_lineares(linhas_fonte)
+        if len(itens_lineares) > 1:
+            return [
+                MatrizLinha(
+                    ordemBloco=bloco["ordem"],
+                    descricao=descricao_item,
+                    tipoTarefa="Informação",
+                )
+                for _marcador, descricao_item, _texto_acao in itens_lineares
+            ]
+
     if categoria == "instrucao_operacional":
         descricao = _texto_fonte_sem_item(bloco)
         item_detectado = str(bloco.get("itemPadraoDetectado") or "")
@@ -807,7 +926,7 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
             else secao_contextual
         )
         inicio_contextual = re.match(
-            r"^(?:Antes de|Após|Em caso|Caso|Se houver|Quando)\b",
+            rf"^{_INICIO_INSTRUCAO_CONDICIONAL_RE}",
             descricao,
             re.IGNORECASE,
         )
@@ -821,11 +940,46 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
                 MatrizLinha(
                     ordemBloco=bloco["ordem"],
                     itemPadrao=item_condicional,
-                    descricao=descricao,
+                    descricao=instrucao,
                     tipoTarefa="Execução",
-                    descricaoTarefa=descricao,
+                    descricaoTarefa=instrucao,
                 )
+                for instrucao in _separar_instrucoes_condicionais(descricao)
             ]
+        itens_lineares = _separar_itens_lineares(linhas_fonte)
+        if len(itens_lineares) > 1:
+            linhas_separadas: list[MatrizLinha] = []
+            for marcador, descricao_item, texto_acao in itens_lineares:
+                item_da_linha = item_padrao
+                if marcador:
+                    item_da_linha = (
+                        f"{item_padrao.rstrip('.')}.({marcador})"
+                        if item_padrao
+                        else f"({marcador})"
+                    )
+                acoes_item = _extrair_acoes_explicitas(texto_acao)
+                if acoes_item:
+                    linhas_separadas.extend(
+                        MatrizLinha(
+                            ordemBloco=bloco["ordem"],
+                            itemPadrao=item_da_linha,
+                            descricao=descricao_item,
+                            tipoTarefa="Execução",
+                            descricaoTarefa=acao,
+                        )
+                        for acao in acoes_item
+                    )
+                else:
+                    linhas_separadas.append(
+                        MatrizLinha(
+                            ordemBloco=bloco["ordem"],
+                            itemPadrao=item_da_linha,
+                            descricao=descricao_item,
+                            tipoTarefa="Informação",
+                        )
+                    )
+            return linhas_separadas
+
         acoes = (
             [_normalizar_acao_para_infinitivo(descricao)]
             if bloco.get("acaoUnica")

@@ -7,13 +7,13 @@ function getFilename(contentDisposition: string | null) {
   const encodedFilename = match?.[1]?.trim();
 
   if (!encodedFilename) {
-    return "qualital-nexus-extracao-pdf.csv";
+    return "qualital-nexus-extracao-pdf.xlsx";
   }
 
   try {
     return decodeURIComponent(encodedFilename);
   } catch {
-    return "qualital-nexus-extracao-pdf.csv";
+    return "qualital-nexus-extracao-pdf.xlsx";
   }
 }
 

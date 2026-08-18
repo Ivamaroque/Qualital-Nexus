@@ -12,6 +12,7 @@ _MAX_RULE_TEXT_LENGTH = 12_000
 _CATEGORY_ALIASES = {
     "atividade_tabela": {"atividade_tabela_2", "atividade_anomalia"},
     "anexo_documento": {"anexo"},
+    "fragmento_interface": {"ruido_fluxograma", "ruido_metadado"},
 }
 
 
@@ -30,9 +31,15 @@ def buscar_parser_rules() -> list[dict[str, Any]]:
 
 def filtrar_regras_por_bloco(regras: list[dict[str, Any]], escopo: str, categoria: str) -> list[dict[str, Any]]:
     def escopo_compativel(escopo_regra: Any) -> bool:
+        escopo_regra_texto = str(escopo_regra or "")
+        escopo_bloco_texto = str(escopo or "")
         return bool(
-            escopo_regra in {"geral", escopo}
-            or (escopo_regra == "anexo" and str(escopo).startswith("anexo_"))
+            escopo_regra_texto in {"geral", escopo_bloco_texto}
+            or (
+                escopo_regra_texto
+                and escopo_bloco_texto.startswith(f"{escopo_regra_texto}_")
+            )
+            or (escopo_regra_texto == "anexo" and escopo_bloco_texto.startswith("anexo_"))
         )
 
     compativeis = [
@@ -40,7 +47,8 @@ def filtrar_regras_por_bloco(regras: list[dict[str, Any]], escopo: str, categori
         for regra in regras
         if escopo_compativel(regra.get("escopo"))
         and (
-            regra.get("escopo") in {escopo, "anexo"}
+            str(regra.get("escopo") or "") in {str(escopo), "anexo"}
+            or str(escopo).startswith(f"{str(regra.get('escopo') or '')}_")
             or regra.get("categoria") in {None, "", "geral", categoria}
         )
     ]

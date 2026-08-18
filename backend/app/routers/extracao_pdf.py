@@ -1,9 +1,9 @@
 import io
 import logging
 import re
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from starlette.datastructures import UploadFile
@@ -16,6 +16,7 @@ from app.services.matrix_structure_service import consolidar_hierarquia_tarefas
 from app.services.normalizer_service import normalizar_linhas
 from app.services.parser_rules_service import buscar_parser_rules, filtrar_regras_por_bloco, preparar_blocos_para_ia
 from app.services.pdf_service import limpar_texto_pdf, separar_blocos
+from app.services.xlsx_service import gerar_xlsx_matriz
 from app.services.processing_status import (
     atualizar_processamento,
     concluir_processamento,
@@ -128,7 +129,7 @@ async def _arquivos_da_requisicao(request: Request) -> list[UploadFile]:
     ]
     settings = get_settings()
     if not arquivos:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Envie ao menos um documento PDF ou Word.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Envie ao menos um documento PDF, DOC ou DOCX.")
     if len(arquivos) > settings.max_files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -286,7 +287,7 @@ async def _processar_arquivos(
                     atualizar_processamento(
                         identificador_processamento,
                         "parcial",
-                        f"O lote {lote_order} falhou; continuando a extração para gerar um CSV parcial.",
+                        f"O lote {lote_order} falhou; continuando a extração para gerar uma saída parcial.",
                         arquivo_atual=file_order,
                         total_arquivos=len(arquivos),
                         lote_atual=lote_order,
@@ -348,7 +349,10 @@ async def status_processamento(identificador: str) -> dict[str, Any]:
 
 
 @router.post("/process")
-async def processar_extracao_pdf(request: Request) -> StreamingResponse:
+async def processar_extracao_pdf(
+    request: Request,
+    formato: Literal["xlsx", "csv"] = Query(default="xlsx", alias="format"),
+) -> StreamingResponse:
     identificador = _identificador_processamento(request)
     if identificador:
         iniciar_processamento(identificador)
@@ -356,29 +360,41 @@ async def processar_extracao_pdf(request: Request) -> StreamingResponse:
     try:
         arquivos = await _arquivos_da_requisicao(request)
         linhas, debug = await _processar_arquivos(arquivos, incluir_debug=False, identificador_processamento=identificador)
+        formato_nome = formato.upper()
         if identificador:
             atualizar_processamento(
                 identificador,
-                "csv",
-                "Gerando o arquivo CSV.",
+                formato,
+                f"Gerando o arquivo {formato_nome}.",
                 etapas_concluidas=debug["etapas_concluidas"],
                 etapas_totais=debug["etapas_totais"],
             )
-        csv = gerar_csv_matriz(linhas)
         falhas_lotes = debug["falhas_lotes"]
-        arquivo_csv = "matriz_priorizacao_parcial.csv" if falhas_lotes else "matriz_priorizacao.csv"
+        extensao = "xlsx" if formato == "xlsx" else "csv"
+        nome_base = "matriz_priorizacao_parcial" if falhas_lotes else "matriz_priorizacao"
+        arquivo_saida = f"{nome_base}.{extensao}"
+        conteudo_saida = (
+            gerar_xlsx_matriz(linhas)
+            if formato == "xlsx"
+            else gerar_csv_matriz(linhas).encode("utf-8")
+        )
         if identificador:
             mensagem = (
-                f"CSV parcial gerado com {len(falhas_lotes)} lote(s) sem saída da IA."
+                f"{formato_nome} parcial gerado com {len(falhas_lotes)} lote(s) sem saída da IA."
                 if falhas_lotes
-                else "CSV gerado e pronto para download."
+                else f"{formato_nome} gerado e pronto para download."
             )
             concluir_processamento(identificador, mensagem, falhas_lotes=falhas_lotes)
         return StreamingResponse(
-            io.BytesIO(csv.encode("utf-8")),
-            media_type="text/csv; charset=utf-8",
+            io.BytesIO(conteudo_saida),
+            media_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                if formato == "xlsx"
+                else "text/csv; charset=utf-8"
+            ),
             headers={
-                "Content-Disposition": f'attachment; filename="{arquivo_csv}"',
+                "Content-Disposition": f'attachment; filename="{arquivo_saida}"',
+                "X-Extraction-Format": formato,
                 "X-Extraction-Partial": str(bool(falhas_lotes)).lower(),
                 "X-Extraction-Failures": str(len(falhas_lotes)),
             },

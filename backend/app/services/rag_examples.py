@@ -28,7 +28,10 @@ async def fetch_rag_examples(settings: Settings, document_type: str) -> list[dic
             response = await client.get(
                 f"{rest_url}/{settings.rag_examples_table}",
                 params={"document_type": f"eq.{document_type}", "limit": str(settings.rag_examples_limit)},
-                headers={"apikey": settings.supabase_anon_key or "", "Authorization": f"Bearer {settings.supabase_anon_key}"},
+                headers={
+                    "apikey": settings.supabase_anon_key or settings.supabase_service_role_key or "",
+                    "Authorization": f"Bearer {settings.supabase_anon_key or settings.supabase_service_role_key or ''}",
+                },
             )
             response.raise_for_status()
             payload = response.json()

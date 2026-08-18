@@ -23,7 +23,7 @@ const processingSteps = [
   "Aplicando regras e exemplos do parser",
   "Gerando linhas com IA",
   "Consolidando resultados",
-  "Gerando CSV"
+  "Gerando XLSX"
 ];
 
 const processingStepByStage: Record<string, number> = {
@@ -32,6 +32,7 @@ const processingStepByStage: Record<string, number> = {
   regras: 2,
   ia: 3,
   normalizacao: 4,
+  xlsx: 5,
   csv: 5,
   concluido: processingSteps.length
 };
@@ -91,7 +92,7 @@ function ExtracaoPdfContent() {
 
   function addFiles(nextFiles: File[]) {
     if (nextFiles.length === 0) {
-      setSelectedFileError("Selecione arquivos PDF ou Word válidos.");
+      setSelectedFileError("Selecione arquivos PDF, DOC ou DOCX válidos.");
       return;
     }
 
@@ -190,7 +191,7 @@ function ExtracaoPdfContent() {
         }),
         status: "concluido",
         etapa: "concluido",
-        mensagem: "CSV gerado e pronto para download."
+        mensagem: "XLSX gerado e pronto para download."
       }));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Não foi possível processar os arquivos agora.";
@@ -234,7 +235,7 @@ function ExtracaoPdfContent() {
       <div className="container stack stack--xl">
         <AppHeader
           title="Extração de documentos"
-          subtitle="Envie documentos técnicos em PDF ou Word e receba um CSV estruturado."
+          subtitle="Envie documentos técnicos em PDF, DOC ou DOCX e receba uma matriz XLSX estruturada."
           userEmail={userEmail}
           userName={displayName}
         />
@@ -301,7 +302,7 @@ function ExtracaoPdfContent() {
                 <div>
                   <p className="eyebrow">Ação principal</p>
                   <h3 className="title" style={{ fontSize: "1.1rem", marginTop: 6 }}>
-                    Processar arquivos e gerar o CSV
+                    Processar arquivos e gerar o XLSX
                   </h3>
                 </div>
                 <span className="badge">{canProcess ? "Pronto" : isProcessing ? "Em processamento" : "Sem arquivos"}</span>
@@ -382,7 +383,7 @@ function ExtracaoPdfContent() {
             <section className="surface card card--compact stack">
               <p className="eyebrow">Resultado</p>
               <h3 className="title" style={{ fontSize: "1.1rem" }}>
-                CSV de saída
+                XLSX de saída
               </h3>
 
               {resultUrl && resultFilename ? (
@@ -394,7 +395,7 @@ function ExtracaoPdfContent() {
                     Processamento concluído. O arquivo {resultFilename} está pronto para download.
                   </div>
                   <button className="button button--primary" type="button" onClick={downloadResult}>
-                    Baixar CSV
+                    Baixar XLSX
                   </button>
                 </>
               ) : (

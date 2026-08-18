@@ -22,6 +22,18 @@ _TABLE_HEADER_RE = re.compile(
     r"^(?:O QUE FAZER|EXECUTANTE|ONDE REGISTRAR|ATIVIDADE|ASPECTO/PERIGO|IMPACTO/RISCO|AÇÕES DE CONTROLE)$",
     re.IGNORECASE,
 )
+_DOCUMENT_METADATA_RE = re.compile(
+    r"^(?:"
+    r"P\d{1,2}(?:\s*\|\s*P\d{1,2})+"
+    r"|INSTALAÇÃO\b|ÁREA\b|DATA\b|RESP(?:ONSÁVEIS)?\b"
+    r"|NOME\b|MATR[IÍ]CULA\b|FUNÇÃO\b|GERÊNCIA\b"
+    r"|A[CÇ][AÃ]O\s+DE\s+RTA\b"
+    r"|FIGURA\s+\d+\b|\d+\s+DE\s+\d+$"
+    r"|(?:SIM|NÃO|NAO|RESP\.?|N\.?A\.?)$"
+    r"|[A-Z]\.$"
+    r")",
+    re.IGNORECASE,
+)
 _TECHNICAL_MARKER_RE = re.compile(
     r"^(?:objetivo|aplicação|descrição|como fazer|porque fazer|registros|definições|recursos necessários|itens críticos)\b",
     re.IGNORECASE,
@@ -35,6 +47,7 @@ _NOISE_LINE_RE = re.compile(
     r"|SHAPE\s+\\\*\s+MERGEFORMAT"
     r"|TTONT-KM3(?:\s*\([^)]*\))?\s*[0-9,\.]*"
     r"|EMED-\d+\b.*"
+    r"|#?\s*INTERNA(?:\s*\\.*)?$"
     r")$",
     re.IGNORECASE,
 )
@@ -278,6 +291,8 @@ def detectar_categoria(texto: str) -> str:
     normalizado = normalized_for_match(texto)
     primeira_linha = texto.splitlines()[0] if texto else ""
     texto_sem_item = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*(?:[-–—]\s*)?", "", normalizado)
+    if _DOCUMENT_METADATA_RE.match(normalizado):
+        return "fragmento_interface"
     if _DOCUMENT_CODE_RE.match(primeira_linha):
         return "padrao_documento"
     if _ANEXO_DOCUMENTO_RE.match(primeira_linha.strip()):
@@ -341,7 +356,12 @@ def detectar_escopo(texto: str) -> str:
 
 def _identificar_anexo_pelo_nome(nome_arquivo: str) -> tuple[str, str]:
     nome = str(nome_arquivo or "").strip()
-    correspondencia = _ANEXO_FILENAME_RE.match(nome)
+    nome_sem_extensao = re.sub(r"\.(?:pdf|docx?|DOCX?)\s*$", "", nome).strip()
+    correspondencia = re.search(
+        r"\bANEXO\s+([A-Z]\d*)\b(?:\s*[-–—:]\s*(.*))?$",
+        nome_sem_extensao,
+        re.IGNORECASE,
+    )
     if not correspondencia:
         return "", ""
     identificador = correspondencia.group(1).upper()
@@ -786,6 +806,7 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
     """Separa segmentos técnicos pequenos, ordenados e adequados à conversão pela IA."""
     identificador_anexo_arquivo, titulo_anexo_arquivo = _identificar_anexo_pelo_nome(nome_arquivo)
     anexo_standalone = bool(identificador_anexo_arquivo)
+    fluxograma_standalone = anexo_standalone and bool(re.search(r"\bFLUXOGRAMA\b", nome_arquivo, re.IGNORECASE))
     blocos: list[list[str]] = []
     atual: list[str] = []
     escopo_tabela_linear: str | None = None
@@ -824,6 +845,7 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
             or marcador_procedimento
             or _PROCESS_REFERENCE_RE.match(linha)
             or _TECHNICAL_MARKER_RE.match(linha)
+            or fluxograma_standalone
         )
         if inicio_de_bloco and atual:
             blocos.append(atual)
@@ -886,7 +908,9 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
 
     resultado: list[dict] = []
     escopo_contextual = (
-        f"anexo_arquivo_{identificador_anexo_arquivo.lower()}"
+        f"anexo_fluxograma_{identificador_anexo_arquivo.lower()}"
+        if fluxograma_standalone
+        else f"anexo_arquivo_{identificador_anexo_arquivo.lower()}"
         if anexo_standalone
         else "documento_principal"
     )
@@ -904,7 +928,9 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
         if not bloco_texto:
             continue
         escopo_detectado = detectar_escopo(bloco_texto)
-        if anexo_standalone:
+        if fluxograma_standalone:
+            escopo_contextual = f"anexo_fluxograma_{identificador_anexo_arquivo.lower()}"
+        elif anexo_standalone:
             escopo_contextual = f"anexo_arquivo_{identificador_anexo_arquivo.lower()}"
         elif escopo_detectado in escopos_explicitos or escopo_detectado.startswith("anexo_"):
             escopo_contextual = escopo_detectado
@@ -1075,6 +1101,13 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
             candidato_acao = True
             categoria = "instrucao_operacional"
         if (
+            fluxograma_standalone
+            and categoria in {"geral", "lista_informativa", "subsecao_numerada"}
+            and not candidato_acao
+            and not normalized_for_match(bloco_texto).startswith(("OBS", "ORIENTAR", "INFORMAR"))
+        ):
+            categoria = "fragmento_interface"
+        if (
             anexo_standalone
             and not item_padrao_fonte
             and "ITENS CRITICOS" in titulo_contextual
@@ -1172,6 +1205,13 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
                 "temSubitens": tem_subitens,
                 "acaoUnica": bool(item_letra_anexo),
                 "anexoStandalone": anexo_standalone,
+                "tipoDocumento": (
+                    "fluxograma"
+                    if fluxograma_standalone
+                    else "anexo"
+                    if anexo_standalone
+                    else "procedimento"
+                ),
                 "identificadorAnexo": identificador_anexo_arquivo,
                 "etapaOperacional": etapa_operacional,
             }

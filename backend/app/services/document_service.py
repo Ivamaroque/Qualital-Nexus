@@ -47,7 +47,7 @@ def validar_documento(filename: str, conteudo: bytes) -> str:
         raise ValueError("O arquivo está vazio.")
     if extensao == ".pdf" and not conteudo.startswith(b"%PDF-"):
         raise ValueError("O conteúdo não corresponde a um arquivo PDF válido.")
-    if extensao == ".doc" and not conteudo.startswith(_ASSINATURA_DOC):
+    if extensao == ".doc" and not conteudo.startswith(_ASSINATURA_DOC) and not conteudo.startswith(b"PK"):
         raise ValueError("O conteúdo não corresponde a um arquivo DOC válido.")
     if extensao == ".docx":
         _validar_docx(conteudo)
@@ -169,5 +169,10 @@ def extrair_texto_documento(conteudo: bytes, filename: str) -> str:
     if extensao == ".pdf":
         return extrair_texto_pdf(conteudo)
     if extensao == ".doc":
+        if conteudo.startswith(b"PK"):
+            try:
+                return _extrair_texto_docx(conteudo)
+            except ValueError as exc:
+                raise ValueError("O arquivo DOC compactado não contém um DOCX legível.") from exc
         return _extrair_texto_doc(conteudo)
     return _extrair_texto_docx(conteudo)
