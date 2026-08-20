@@ -37,7 +37,7 @@ const processingStepByStage: Record<string, number> = {
   concluido: processingSteps.length
 };
 
-const ollamaStatusLabels: Record<string, string> = {
+const iaStatusLabels: Record<string, string> = {
   enviando_lote: "enviando o lote",
   conectando: "conectando",
   aguardando_resposta: "aguardando o primeiro trecho",
@@ -346,7 +346,7 @@ function ExtracaoPdfContent() {
                 <p>{processingProgress?.mensagem ?? "O status do processamento aparecerá aqui após o envio."}</p>
                 {processingProgress?.ia_status ? (
                   <p>
-                    Ollama: {ollamaStatusLabels[processingProgress.ia_status] ?? processingProgress.ia_status}
+                    IA: {iaStatusLabels[processingProgress.ia_status] ?? processingProgress.ia_status}
                     {processingProgress.ia_trechos_recebidos > 0
                       ? ` · ${processingProgress.ia_trechos_recebidos} trechos recebidos (${processingProgress.ia_caracteres_recebidos} caracteres)`
                       : ""}

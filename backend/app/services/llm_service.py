@@ -9,7 +9,6 @@ from typing import Any
 import httpx
 
 from app.core.config import get_settings
-from app.core.openai_client import get_openai_client
 from app.schemas.matriz import MatrizLinha, MatrizOutput
 from app.utils.text_utils import normalized_for_match
 
@@ -1193,28 +1192,44 @@ def _garantir_granularidade_operacional(blocos: list[dict[str, Any]], matriz: Ma
     return MatrizOutput(linhas=consolidadas)
 
 
-def _converter_com_openai(prompt_usuario: dict[str, Any]) -> MatrizOutput:
-    client = get_openai_client()
-    if client is None:
-        raise LLMConversionError("OPENAI_API_KEY não está configurada no backend.")
+def _converter_com_openrouter(
+    prompt_usuario: dict[str, Any], on_progress: OllamaProgressCallback | None = None
+) -> MatrizOutput:
+    settings = get_settings()
+    if not settings.openrouter_api_key:
+        raise LLMConversionError("OPENROUTER_API_KEY não está configurada no backend.")
 
+    headers = {"Authorization": f"Bearer {settings.openrouter_api_key}"}
+    if settings.openrouter_http_referer:
+        headers["HTTP-Referer"] = settings.openrouter_http_referer
+    if settings.openrouter_app_title:
+        headers["X-OpenRouter-Title"] = settings.openrouter_app_title
+    payload = {
+        "model": settings.openrouter_model,
+        "messages": [
+            {"role": "system", "content": f"{SYSTEM_PROMPT}\n\n{JSON_OUTPUT_INSTRUCTION}"},
+            {"role": "user", "content": json.dumps(prompt_usuario, ensure_ascii=False)},
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0,
+    }
+    endpoint = "https://openrouter.ai/api/v1/chat/completions"
     try:
-        response = client.responses.parse(
-            model=get_settings().openai_model,
-            input=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps(prompt_usuario, ensure_ascii=False)},
-            ],
-            text_format=MatrizOutput,
+        content = _solicitar_ollama_em_stream(
+            endpoint,
+            payload,
+            settings.ollama_timeout_seconds,
+            on_progress,
+            settings.ollama_max_response_characters,
+            settings.ollama_max_request_seconds,
+            headers,
         )
-        resultado = response.output_parsed
-        if resultado is None:
-            raise LLMConversionError("A OpenAI não retornou uma saída estruturada.")
-        return MatrizOutput.model_validate(resultado)
+        return _matriz_de_conteudo_json(content)
     except LLMConversionError:
         raise
-    except Exception as exc:
-        raise LLMConversionError("Falha ao obter JSON estruturado da OpenAI.") from exc
+    except (httpx.HTTPError, AttributeError, KeyError, IndexError, TypeError, ValueError) as exc:
+        logger.exception("Falha ao processar a resposta do OpenRouter.")
+        raise LLMConversionError("Falha ao obter JSON estruturado pelo OpenRouter.") from exc
 
 
 def _solicitar_ollama_em_stream(
@@ -1224,6 +1239,7 @@ def _solicitar_ollama_em_stream(
     on_progress: OllamaProgressCallback | None,
     max_response_characters: int | None = None,
     max_request_seconds: int | None = None,
+    headers: dict[str, str] | None = None,
 ) -> str:
     if on_progress:
         on_progress("conectando", 0, 0)
@@ -1235,7 +1251,7 @@ def _solicitar_ollama_em_stream(
     inicio_requisicao = time.monotonic()
     payload_com_stream = {**payload, "stream": True}
 
-    with httpx.stream("POST", endpoint, json=payload_com_stream, timeout=timeout_seconds) as response:
+    with httpx.stream("POST", endpoint, json=payload_com_stream, headers=headers, timeout=timeout_seconds) as response:
         response.raise_for_status()
         if on_progress:
             on_progress("aguardando_resposta", 0, 0)
@@ -1349,7 +1365,7 @@ def _converter_prompt(
 ) -> MatrizOutput:
     if get_settings().llm_provider == "ollama":
         return _converter_com_ollama(prompt_usuario, on_progress)
-    return _converter_com_openai(prompt_usuario)
+    return _converter_com_openrouter(prompt_usuario, on_progress)
 
 
 def converter_blocos_com_ia(

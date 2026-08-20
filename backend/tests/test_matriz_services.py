@@ -389,7 +389,7 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertIn("omitiu blocos", _mensagem_progresso_ollama("corrigindo_cobertura"))
         self.assertEqual(
             _mensagem_progresso_ollama("estado_novo"),
-            "Ollama está atualizando o processamento do lote.",
+            "A IA está atualizando o processamento do lote.",
         )
 
     def test_ollama_json_without_linhas_has_clear_error(self):

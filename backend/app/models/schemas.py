@@ -36,4 +36,4 @@ class HealthResponse(BaseModel):
     service: str = "qualital-nexus-backend"
     environment: str
     authentication_configured: bool
-    openai_configured: bool
+    openrouter_configured: bool

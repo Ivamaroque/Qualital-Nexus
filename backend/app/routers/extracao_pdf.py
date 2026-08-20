@@ -31,18 +31,18 @@ _PROCESSING_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{8,100}")
 _MAXIMO_BLOCOS_POR_LOTE = 8
 _MAXIMO_CARACTERES_POR_LOTE = 12_000
 _MENSAGENS_PROGRESSO_OLLAMA = {
-    "conectando": "Conectando ao Ollama para gerar a saída estruturada.",
-    "aguardando_resposta": "Ollama recebeu o lote e aguarda o início da resposta.",
-    "raciocinando": "Ollama está processando o lote antes de emitir a resposta estruturada.",
-    "gerando_resposta": "Ollama está transmitindo a resposta estruturada.",
-    "resposta_completa": "Ollama concluiu a transmissão; validando a resposta estruturada.",
-    "corrigindo_formato": "Ollama retornou um formato inválido; solicitando correção da resposta.",
-    "corrigindo_cobertura": "Ollama omitiu blocos; solicitando a recuperação somente dos blocos sem saída.",
+    "conectando": "Conectando à IA para gerar a saída estruturada.",
+    "aguardando_resposta": "A IA recebeu o lote e aguarda o início da resposta.",
+    "raciocinando": "A IA está processando o lote antes de emitir a resposta estruturada.",
+    "gerando_resposta": "A IA está transmitindo a resposta estruturada.",
+    "resposta_completa": "A IA concluiu a transmissão; validando a resposta estruturada.",
+    "corrigindo_formato": "A IA retornou um formato inválido; solicitando correção da resposta.",
+    "corrigindo_cobertura": "A IA omitiu blocos; solicitando a recuperação somente dos blocos sem saída.",
 }
 
 
 def _mensagem_progresso_ollama(estado: str) -> str:
-    return _MENSAGENS_PROGRESSO_OLLAMA.get(estado, "Ollama está atualizando o processamento do lote.")
+    return _MENSAGENS_PROGRESSO_OLLAMA.get(estado, "A IA está atualizando o processamento do lote.")
 
 
 def _identificador_processamento(request: Request) -> str | None:

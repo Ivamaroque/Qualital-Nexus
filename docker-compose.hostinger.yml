@@ -1,0 +1,23 @@
+services:
+  api:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    expose:
+      - "8000"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=n8n_default
+      - traefik.http.routers.qualital-api.rule=Host(`${API_DOMAIN:?Defina API_DOMAIN no arquivo .env da VPS}`)
+      - traefik.http.routers.qualital-api.entrypoints=websecure
+      - traefik.http.routers.qualital-api.tls=true
+      - traefik.http.routers.qualital-api.tls.certresolver=mytlschallenge
+      - traefik.http.services.qualital-api.loadbalancer.server.port=8000
+    networks:
+      - n8n_default
+
+networks:
+  n8n_default:
+    external: true

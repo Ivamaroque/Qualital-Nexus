@@ -25,9 +25,11 @@ class Settings(BaseSettings):
     rag_examples_table: str = "rag_examples"
     rag_examples_limit: int = 5
 
-    openai_api_key: str | None = None
-    openai_model: str = "gpt-5-nano"
-    llm_provider: Literal["ollama", "openai"] = "ollama"
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "openai/gpt-5-nano"
+    openrouter_http_referer: str | None = None
+    openrouter_app_title: str | None = None
+    llm_provider: Literal["ollama", "openrouter"] = "ollama"
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: str = "qwen3:8b"
     ollama_timeout_seconds: int = 300

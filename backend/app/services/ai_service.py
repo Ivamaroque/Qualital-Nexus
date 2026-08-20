@@ -13,14 +13,14 @@ logger = logging.getLogger(__name__)
 async def normalize_complex_blocks(blocks: list[ParsedBlock], examples: list[dict[str, Any]], settings: Settings) -> list[ParsedBlock]:
     """Normaliza somente blocos explicitamente marcados como ambíguos pelo parser.
 
-    Sem chave da OpenAI, ou em falhas externas, preserva exatamente o resultado
-    determinístico. A chamada usa a API Responses sem depender do SDK Python.
+    Sem chave do OpenRouter, ou em falhas externas, preserva exatamente o resultado
+    determinístico. A chamada usa o endpoint Chat Completions do OpenRouter sem depender de SDK externo.
     """
     targets = [block for block in blocks if block.needs_ai]
     if not targets:
         return blocks
-    if not settings.openai_api_key:
-        logger.info("OpenAI não configurada; %d blocos seguem com parser determinístico.", len(targets))
+    if not settings.openrouter_api_key:
+        logger.info("OpenRouter não configurado; %d blocos seguem com parser determinístico.", len(targets))
         return blocks
 
     prompt = {
@@ -31,22 +31,22 @@ async def normalize_complex_blocks(blocks: list[ParsedBlock], examples: list[dic
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
-                "https://api.openai.com/v1/responses",
-                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=_openrouter_headers(settings),
                 json={
-                    "model": settings.openai_model,
-                    "input": json.dumps(prompt, ensure_ascii=False),
-                    "text": {"format": {"type": "json_object"}},
+                    "model": settings.openrouter_model,
+                    "messages": [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
+                    "response_format": {"type": "json_object"},
                 },
             )
             response.raise_for_status()
             result = response.json()
     except (httpx.HTTPError, ValueError):
-        logger.warning("Normalização OpenAI falhou; usando parser determinístico.", exc_info=True)
+        logger.warning("Normalização via OpenRouter falhou; usando parser determinístico.", exc_info=True)
         return blocks
 
     try:
-        output_text = result["output"][0]["content"][0]["text"]
+        output_text = result["choices"][0]["message"]["content"]
         classifications = json.loads(output_text).get("classifications", [])
         allowed = {item.value for item in BlockType}
         for item in classifications:
@@ -54,5 +54,14 @@ async def normalize_complex_blocks(blocks: list[ParsedBlock], examples: list[dic
             if isinstance(index, int) and 0 <= index < len(targets) and block_type in allowed:
                 targets[index].block_type = BlockType(block_type)
     except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError):
-        logger.warning("Resposta OpenAI não pôde ser interpretada; usando parser determinístico.", exc_info=True)
+        logger.warning("Resposta do OpenRouter não pôde ser interpretada; usando parser determinístico.", exc_info=True)
     return blocks
+
+
+def _openrouter_headers(settings: Settings) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {settings.openrouter_api_key}"}
+    if settings.openrouter_http_referer:
+        headers["HTTP-Referer"] = settings.openrouter_http_referer
+    if settings.openrouter_app_title:
+        headers["X-OpenRouter-Title"] = settings.openrouter_app_title
+    return headers
