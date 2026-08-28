@@ -1,7 +1,9 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
+import qLogo from "@/app/assets/Q_logo.png";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 
 export default function LoginPage() {
@@ -72,83 +74,109 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="page-shell page-shell--centered">
-      <div className="container">
-        <div className="surface card hero grid grid--two" style={{ alignItems: "stretch" }}>
-          <section className="stack stack--xl" style={{ justifyContent: "center" }}>
-            <div className="brand">
-              <div className="brand__mark">QN</div>
-              <div>
-                <div style={{ fontSize: "1.1rem" }}>Qualital Nexus</div>
-                <div className="text text--xs">Plataforma interna da Qualital</div>
+    <main className="login-page">
+      <div className="login-layout">
+        <section className="login-institutional" aria-labelledby="login-institutional-title">
+          <div className="login-institutional__glow login-institutional__glow--top" aria-hidden="true" />
+          <div className="login-institutional__glow login-institutional__glow--bottom" aria-hidden="true" />
+
+          <div className="login-identity">
+            <div className="login-identity__mark">
+              <Image alt="" priority src={qLogo} />
+            </div>
+            <div>
+              <p className="login-identity__name">Qualital Nexus</p>
+              <p className="login-identity__subtitle">Plataforma interna</p>
+            </div>
+          </div>
+
+          <div className="login-institutional__content">
+            <span className="login-kicker">Acesso interno</span>
+            <h1 id="login-institutional-title">Entre para operar as ferramentas.</h1>
+            <p className="login-institutional__description">
+              Acesse o hub corporativo. A ferramenta de extração de documentos possui fila ordenável,
+              estados de processamento e download estruturado.
+            </p>
+
+          </div>
+
+          <p className="login-copyright">© 2026 Qualital Engenharia e Sustentabilidade</p>
+        </section>
+
+        <section className="login-form-panel" aria-labelledby="login-form-title">
+          <div className="login-form">
+            <header className="login-form__header">
+              <h2 id="login-form-title">Acesso ao Sistema</h2>
+              <p>Insira suas credenciais corporativas.</p>
+            </header>
+
+            {message ? (
+              <div className="alert alert--error" role="alert">
+                {message}
               </div>
-            </div>
+            ) : null}
 
-            <div className="stack" style={{ gap: 12 }}>
-              <p className="eyebrow">Acesso interno</p>
-              <h1 className="title title--xl">Entre para operar as ferramentas corporativas.</h1>
-              <p className="text text--sm">
-                A ferramenta de extração de documentos possui fila ordenável, estados de processamento e download do CSV.
-              </p>
-            </div>
-
-            <div className="panel stack" style={{ maxWidth: 440 }}>
-              <p className="text text--strong">Foco do MVP</p>
-              <p className="text text--sm">Autenticação com Supabase, lista local de ferramentas e integração preparada para o backend Python/FastAPI.</p>
-            </div>
-          </section>
-
-          <section className="surface surface--solid card stack" style={{ justifyContent: "center" }}>
-            <div className="stack" style={{ gap: 10 }}>
-              <p className="eyebrow">Login</p>
-              <h2 className="title title--lg">Acessar o sistema</h2>
-              <p className="text text--sm">Use o e-mail e senha cadastrados no Supabase Auth.</p>
-            </div>
-
-            {message ? <div className="alert alert--error">{message}</div> : null}
-
-            <form className="stack" onSubmit={handleSubmit}>
-              <label className="field">
-                <span className="label">E-mail</span>
-                <input
-                  className="input"
-                  name="email"
-                  type="email"
-                  placeholder="nome@qualital.com.br"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  autoComplete="email"
-                  required
-                />
+            <form className="login-form__fields" onSubmit={handleSubmit}>
+              <label className="login-field">
+                <span>E-mail corporativo</span>
+                <span className="login-input-wrap">
+                  <span aria-hidden="true" className="login-input-icon">✉</span>
+                  <input
+                    autoComplete="email"
+                    className="login-input"
+                    name="email"
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="nome@qualital.com.br"
+                    required
+                    type="email"
+                    value={email}
+                  />
+                </span>
               </label>
 
-              <label className="field">
-                <span className="label">Senha</span>
-                <input
-                  className="input"
-                  name="password"
-                  type="password"
-                  placeholder="Digite sua senha"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  autoComplete="current-password"
-                  required
-                />
+              <label className="login-field">
+                <span>Senha</span>
+                <span className="login-input-wrap">
+                  <span aria-hidden="true" className="login-input-icon">●</span>
+                  <input
+                    autoComplete="current-password"
+                    className="login-input"
+                    name="password"
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder="Digite sua senha"
+                    required
+                    type="password"
+                    value={password}
+                  />
+                </span>
               </label>
 
-              <button className="button button--primary" type="submit" disabled={loading}>
+              <div className="login-form__options">
+                <label className="login-checkbox">
+                  <input defaultChecked type="checkbox" />
+                  <span>Manter conectado</span>
+                </label>
+                <a href="mailto:suporte@qualital.com.br?subject=Recuperação%20de%20senha%20-%20Qualital%20Nexus">
+                  Esqueceu a senha?
+                </a>
+              </div>
+
+              <button className="login-submit" disabled={loading} type="submit">
                 {loading ? (
                   <>
                     <span className="spinner" aria-hidden="true" />
-                    Entrando
+                    Entrando…
                   </>
                 ) : (
-                  "Entrar"
+                  <>
+                    Entrar no Nexus
+                    <span aria-hidden="true">→</span>
+                  </>
                 )}
               </button>
             </form>
-          </section>
-        </div>
+          </div>
+        </section>
       </div>
     </main>
   );

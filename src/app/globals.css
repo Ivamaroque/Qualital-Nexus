@@ -555,3 +555,351 @@ button {
   background: rgba(175, 105, 0, 0.1);
   border-color: rgba(175, 105, 0, 0.2);
 }
+
+/* Tela de login — reprodução estrutural do qualital_nexus_app_completo.html. */
+.login-page {
+  display: grid;
+  min-height: 100vh;
+  padding: 32px;
+  place-items: center;
+  background-color: #f8fafc;
+  background-image:
+    radial-gradient(at 0% 0%, rgba(44, 65, 61, 0.05) 0, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(219, 97, 53, 0.05) 0, transparent 50%);
+}
+
+.login-layout {
+  display: flex;
+  width: min(1024px, 100%);
+  min-height: 600px;
+  overflow: hidden;
+  border: 1px solid #f1f5f9;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 25px 55px rgba(44, 65, 61, 0.14);
+}
+
+.login-institutional {
+  position: relative;
+  display: flex;
+  flex: 0 0 41.6667%;
+  flex-direction: column;
+  min-height: 600px;
+  padding: 48px;
+  overflow: hidden;
+  color: #fff;
+  background: #2c413d;
+}
+
+.login-institutional__glow {
+  position: absolute;
+  border-radius: 999px;
+  pointer-events: none;
+  filter: blur(48px);
+}
+
+.login-institutional__glow--top {
+  top: -80px;
+  right: -80px;
+  width: 288px;
+  height: 288px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.login-institutional__glow--bottom {
+  bottom: -70px;
+  left: -70px;
+  width: 240px;
+  height: 240px;
+  background: rgba(219, 97, 53, 0.16);
+}
+
+.login-identity,
+.login-institutional__content,
+.login-copyright {
+  position: relative;
+  z-index: 1;
+}
+
+.login-identity {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.login-identity__mark {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  padding: 8px;
+  place-items: center;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.13);
+}
+
+.login-identity__mark img {
+  width: 100%;
+  height: auto;
+}
+
+.login-identity__name,
+.login-identity__subtitle,
+.login-institutional__description,
+.login-copyright,
+.login-form__header h2,
+.login-form__header p {
+  margin: 0;
+}
+
+.login-identity__name {
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.login-identity__subtitle {
+  margin-top: 3px;
+  color: #d1d5db;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+
+.login-institutional__content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  margin-top: 48px;
+}
+
+.login-kicker {
+  align-self: flex-start;
+  margin-bottom: 24px;
+  padding: 7px 14px;
+  border: 1px solid rgba(219, 97, 53, 0.42);
+  border-radius: 999px;
+  color: #f1784d;
+  background: rgba(219, 97, 53, 0.14);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.login-institutional h1 {
+  max-width: 350px;
+  margin: 0;
+  color: #fff;
+  font-size: clamp(2rem, 3.15vw, 2.6rem);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+}
+
+.login-institutional__description {
+  max-width: 350px;
+  margin-top: 20px;
+  color: #d1d5db;
+  font-size: 0.9rem;
+  font-weight: 300;
+  line-height: 1.62;
+}
+
+.login-copyright {
+  margin-top: 32px;
+  color: #9ca3af;
+  font-size: 0.75rem;
+  font-weight: 300;
+}
+
+.login-form-panel {
+  display: flex;
+  flex: 0 0 58.3333%;
+  align-items: center;
+  padding: 64px;
+  background: #fff;
+}
+
+.login-form {
+  width: min(384px, 100%);
+  margin: 0 auto;
+}
+
+.login-form__header {
+  margin-bottom: 36px;
+}
+
+.login-form__header h2 {
+  color: #111827;
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.login-form__header p {
+  margin-top: 8px;
+  color: #6b7280;
+  font-size: 0.9rem;
+}
+
+.login-form__fields {
+  display: grid;
+  gap: 20px;
+}
+
+.login-field {
+  display: grid;
+  gap: 7px;
+  color: #374151;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.login-input-wrap {
+  position: relative;
+  display: block;
+}
+
+.login-input-icon {
+  position: absolute;
+  top: 50%;
+  left: 16px;
+  color: #9ca3af;
+  font-size: 1rem;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.login-input {
+  width: 100%;
+  height: 48px;
+  padding: 0 16px 0 44px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  outline: none;
+  color: #111827;
+  background: #f9fafb;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.login-input:focus {
+  border-color: transparent;
+  background: #fff;
+  box-shadow: 0 0 0 2px #db6135;
+}
+
+.login-form__options {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 4px;
+  gap: 16px;
+}
+
+.login-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #4b5563;
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+
+.login-checkbox input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #db6135;
+}
+
+.login-form__options a {
+  color: #db6135;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.login-form__options a:hover {
+  color: #c5532b;
+}
+
+.login-submit {
+  display: inline-flex;
+  min-height: 50px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 12px;
+  border: 0;
+  border-radius: 12px;
+  color: #fff;
+  background: #db6135;
+  box-shadow: 0 8px 16px rgba(219, 97, 53, 0.28);
+  font-size: 0.875rem;
+  font-weight: 700;
+  transition: background-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.login-submit:hover:not(:disabled) {
+  background: #c5532b;
+  box-shadow: 0 10px 18px rgba(219, 97, 53, 0.34);
+  transform: translateY(-2px);
+}
+
+.login-submit:focus-visible,
+.login-form__options a:focus-visible,
+.login-checkbox input:focus-visible {
+  outline: 2px solid #db6135;
+  outline-offset: 3px;
+}
+
+.login-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+@media (max-width: 760px) {
+  .login-page {
+    padding: 16px;
+  }
+
+  .login-layout {
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .login-institutional,
+  .login-form-panel {
+    flex-basis: auto;
+  }
+
+  .login-institutional {
+    min-height: 410px;
+    padding: 32px;
+  }
+
+  .login-form-panel {
+    padding: 40px 28px;
+  }
+
+  .login-institutional__content {
+    margin-top: 40px;
+  }
+}
+
+@media (max-width: 420px) {
+  .login-institutional,
+  .login-form-panel {
+    padding: 28px 22px;
+  }
+
+  .login-form__options {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+}
