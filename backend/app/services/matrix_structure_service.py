@@ -287,6 +287,79 @@ def _aplicar_hierarquia_do_anexo(
             str(linha.get("itemPadrao") or ""),
         )
 
+def _aplicar_hierarquia_lista_de_tarefas(
+    blocos_por_ordem: dict[int, dict[str, Any]],
+    resultado: list[dict[str, Any]],
+    raiz_inicial: int,
+) -> None:
+    """Mantém tarefas diretas e checklists sob a mesma raiz HTA."""
+    raizes: list[str] = []
+    for bloco in blocos_por_ordem.values():
+        contexto = bloco.get("contextoTarefa") or {}
+        raiz = str(contexto.get("listaTarefasRaiz") or "").rstrip(".")
+        if raiz and raiz not in raizes:
+            raizes.append(raiz)
+
+    proxima_raiz = max(1, raiz_inicial)
+    for raiz in raizes:
+        linha_raiz = next(
+            (
+                linha
+                for linha in resultado
+                if _item_para_hierarquia(linha.get("itemPadrao")) == raiz
+                and linha.get("tipoTarefa") == "Título/Subtítulo"
+            ),
+            None,
+        )
+        numero_raiz = proxima_raiz
+        if linha_raiz:
+            existente = str(linha_raiz.get("subtarefaHTA") or "").strip()
+            if re.fullmatch(r"\d+\.", existente):
+                numero_raiz = int(existente.rstrip("."))
+            linha_raiz["subtarefaHTA"] = f"{numero_raiz}."
+            linha_raiz["descricaoTarefa"] = _descricao_tarefa_com_item(
+                str(linha_raiz.get("descricao") or ""),
+                str(linha_raiz.get("itemPadrao") or raiz),
+            )
+        proxima_raiz = max(proxima_raiz, numero_raiz + 1)
+
+        tarefas: dict[str, int] = {}
+        contador_tarefas = 0
+        contadores_lista: defaultdict[str, int] = defaultdict(int)
+        for linha in resultado:
+            ordem = linha.get("ordemBloco")
+            bloco = blocos_por_ordem.get(int(ordem)) if str(ordem or "").isdigit() else None
+            contexto = (bloco or {}).get("contextoTarefa") or {}
+            if str(contexto.get("listaTarefasRaiz") or "").rstrip(".") != raiz:
+                continue
+            tarefa = str(contexto.get("tarefaLista") or "").rstrip(".")
+            nivel = contexto.get("nivelLista")
+            if nivel == "tarefa" and linha.get("tipoTarefa") == "Execução":
+                if tarefa not in tarefas:
+                    contador_tarefas += 1
+                    tarefas[tarefa] = contador_tarefas
+                linha["subtarefaHTA"] = f"{numero_raiz}.{tarefas[tarefa]}."
+                linha["itemPadrao"] = f"{tarefa}."
+                linha["descricaoTarefa"] = _descricao_tarefa_com_item(
+                    str(linha.get("descricaoTarefa") or linha.get("descricao") or ""),
+                    str(linha.get("itemPadrao") or ""),
+                )
+            elif nivel == "lista_verificacao" and linha.get("tipoTarefa") == "Título/Subtítulo" and tarefa in tarefas:
+                linha["subtarefaHTA"] = f"{numero_raiz}.{tarefas[tarefa]}.1."
+                linha["itemPadrao"] = f"{tarefa}."
+                linha["descricaoTarefa"] = _descricao_tarefa_com_item(
+                    str(linha.get("descricao") or ""),
+                    str(linha.get("itemPadrao") or ""),
+                )
+            elif nivel == "item_lista_verificacao" and linha.get("tipoTarefa") == "Execução" and tarefa in tarefas:
+                contadores_lista[tarefa] += 1
+                linha["subtarefaHTA"] = f"{numero_raiz}.{tarefas[tarefa]}.1.{contadores_lista[tarefa]}."
+                item_local = str((bloco or {}).get("itemPadraoFonte") or "").rstrip(".")
+                linha["itemPadrao"] = f"{tarefa}. ({item_local}.)" if item_local else f"{tarefa}."
+                linha["descricaoTarefa"] = _descricao_tarefa_com_item(
+                    str(linha.get("descricaoTarefa") or linha.get("descricao") or ""),
+                    str(linha.get("itemPadrao") or ""),
+                )
 
 def consolidar_hierarquia_tarefas(
     blocos: list[dict[str, Any]],
@@ -431,4 +504,5 @@ def consolidar_hierarquia_tarefas(
             item_exibicao,
         )
 
+    _aplicar_hierarquia_lista_de_tarefas(blocos_por_ordem, resultado, raiz_inicial)
     return resultado

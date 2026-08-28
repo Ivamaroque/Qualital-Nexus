@@ -1,4 +1,6 @@
+import base64
 import re
+from collections import Counter
 
 import fitz
 
@@ -28,7 +30,7 @@ _DOCUMENT_METADATA_RE = re.compile(
     r"|INSTALAÇÃO\b|ÁREA\b|DATA\b|RESP(?:ONSÁVEIS)?\b"
     r"|NOME\b|MATR[IÍ]CULA\b|FUNÇÃO\b|GERÊNCIA\b"
     r"|A[CÇ][AÃ]O\s+DE\s+RTA\b"
-    r"|FIGURA\s+\d+\b|\d+\s+DE\s+\d+$"
+    r"|\d+\s+DE\s+\d+$"
     r"|(?:SIM|NÃO|NAO|RESP\.?|N\.?A\.?)$"
     r"|[A-Z]\.$"
     r")",
@@ -51,6 +53,17 @@ _NOISE_LINE_RE = re.compile(
     r")$",
     re.IGNORECASE,
 )
+_IMAGE_MARKER_RE = re.compile(r"^\[\[IMAGEM_PDF:(\d+)\]\]$")
+_MIN_IMAGE_TOP = 65
+_MIN_IMAGE_WIDTH = 120
+_MIN_IMAGE_HEIGHT = 80
+_MIN_IMAGE_AREA = 15_000
+_REPEATED_IMAGE_THRESHOLD = 3
+_FIGURE_CAPTION_RE = re.compile(r"^[•\-]?\s*FIGURA\s+\d+\s*[-–—:]", re.IGNORECASE)
+_SPECIAL_BLOCK_START_RE = re.compile(
+    r"^(?:LISTA\s+DE\s+VERIFICAÇÃO|OBSERVAÇÕES?\s+(?:PRELIMINARES|\d+)|COMO\s+FAZER|O\s+QUE\s+FAZER)\s*[:.]?",
+    re.IGNORECASE,
+)
 _NUMBERED_ITEM_RE = re.compile(r"^\s*(\d+(?:\.\d+)*\.?)\s*(?:[-–—]\s*)?(.*)$")
 _ANEXO_ALPHANUMERIC_HEADING_RE = re.compile(
     r"^\s*(\d+[A-Z])\s*[-–—]\s*(.+)$",
@@ -63,7 +76,7 @@ _ACTION_IMPERATIVE_RE = re.compile(
     r"inspecione|inspecionar|instale|instalar|interrompa|interromper|isole|isolar|ligue|ligar|"
     r"observe|observar|posicione|posicionar|preencha|preencher|realize|realizar|recoloque|recolocar|"
     r"retorne|retornar|retire|retirar|solicite|solicitar|suba|subir|teste|testar|trave|travar|"
-    r"utilize|utilizar|verifique|verificar|varie|variar)\b",
+    r"utilize|utilizar|verifique|verificar|certifique|certificar|varie|variar)\b",
     re.IGNORECASE,
 )
 _OPERATIONAL_RESPONSIBLE_CELL_RE = re.compile(
@@ -94,7 +107,7 @@ _TECHNICAL_PARAMETER_RE = re.compile(
 )
 _ACTION_START_RE = re.compile(
     r"^\s*(?:\d+(?:\.\d+)+\.?\s+)?(?:abortar|abrir|acionar|acoplar|aguardar|ajustar|"
-    r"alinhar|anotar|aplicar|atentar|atuar|avaliar|bloquear|coletar|comunicar|confirmar|"
+    r"alinhar|anotar|aplicar|atentar|atuar|avaliar|bloquear|certificar|coletar|comunicar|confirmar|"
     r"contatar|desligar|emitir|encaminhar|entrar\s+em\s+contato|estabelecer|executar|"
     r"fechar|informar|iniciar|inspecionar|instalar|interromper|isolar|liberar|ligar|manter|"
     r"medir|monitorar|operar|parar|posicionar|preencher|proceder|realizar|registrar|remover|reparar|"
@@ -111,6 +124,21 @@ _ACTION_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 _NEGATIVE_ACTION_RE = re.compile(r"\bn[aã]o\s+dev(?:e|em|er[aá]|er[aã]o)\b", re.IGNORECASE)
+
+
+def _is_image_marker(texto: str) -> bool:
+    return _IMAGE_MARKER_RE.fullmatch(normalize_whitespace(texto)) is not None
+
+
+def _bboxes_se_sobrepoem(primeiro: tuple[float, ...], segundo: tuple[float, ...]) -> bool:
+    if len(primeiro) != 4 or len(segundo) != 4:
+        return False
+    return not (
+        primeiro[2] <= segundo[0]
+        or segundo[2] <= primeiro[0]
+        or primeiro[3] <= segundo[1]
+        or segundo[3] <= primeiro[1]
+    )
 
 
 def _linha_dentro_de_tabela(linha_bbox: tuple[float, float, float, float], tabela_bbox: tuple[float, ...]) -> bool:
@@ -197,7 +225,11 @@ def _serializar_tabela(tabela: object) -> str:
     return ("\n\n" if operacional else "\n").join(serializadas)
 
 
-def _extrair_pagina_com_tabelas(page: fitz.Page, tabelas: list[object]) -> str:
+def _extrair_pagina_com_tabelas(
+    page: fitz.Page,
+    tabelas: list[object],
+    imagens: list[tuple[float, str]] | None = None,
+) -> str:
     eventos: list[tuple[float, str]] = []
     bboxes_tabelas = [tabela.bbox for tabela in tabelas]
     pagina_dict = page.get_text("dict", sort=True)
@@ -223,34 +255,102 @@ def _extrair_pagina_com_tabelas(page: fitz.Page, tabelas: list[object]) -> str:
             eventos.append((posicao_y or 0, "\n".join(linhas_fora)))
 
     eventos.extend((tabela.bbox[1], _serializar_tabela(tabela)) for tabela in tabelas)
+    eventos.extend(imagens or [])
     return "\n\n".join(texto for _, texto in sorted(eventos, key=lambda evento: evento[0]) if texto.strip())
 
 
-def extrair_texto_pdf(pdf_bytes: bytes) -> str:
-    """Extrai texto preservando parágrafos nas páginas predominantemente textuais."""
+def _imagem_pdf_relevante(info: dict, frequencias: Counter[int]) -> bool:
+    bbox = tuple(info.get("bbox") or ())
+    xref = int(info.get("xref") or 0)
+    if len(bbox) != 4 or xref <= 0 or frequencias[xref] >= _REPEATED_IMAGE_THRESHOLD:
+        return False
+    largura = bbox[2] - bbox[0]
+    altura = bbox[3] - bbox[1]
+    return (
+        bbox[1] >= _MIN_IMAGE_TOP
+        and largura >= _MIN_IMAGE_WIDTH
+        and altura >= _MIN_IMAGE_HEIGHT
+        and largura * altura >= _MIN_IMAGE_AREA
+    )
+
+
+def extrair_texto_e_imagens_pdf(pdf_bytes: bytes) -> tuple[str, list[dict]]:
+    """Extrai texto e figuras relevantes na mesma ordem visual do PDF."""
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+            infos_por_pagina = [page.get_image_info(xrefs=True) for page in document]
+            frequencias = Counter(
+                int(info.get("xref") or 0)
+                for infos in infos_por_pagina
+                for info in infos
+                if int(info.get("xref") or 0) > 0
+            )
             paginas: list[str] = []
-            for page in document:
+            imagens_extraidas: list[dict] = []
+            for numero_pagina, page in enumerate(document, start=1):
+                eventos_imagem: list[tuple[float, str]] = []
+                bboxes_imagem: list[tuple[float, ...]] = []
+                for info in infos_por_pagina[numero_pagina - 1]:
+                    if not _imagem_pdf_relevante(info, frequencias):
+                        continue
+                    try:
+                        extraida = document.extract_image(int(info["xref"]))
+                    except (RuntimeError, ValueError):
+                        continue
+                    conteudo = extraida.get("image")
+                    if not conteudo:
+                        continue
+                    indice = len(imagens_extraidas) + 1
+                    bbox = tuple(info["bbox"])
+                    formato = str(extraida.get("ext") or "png").lower()
+                    if formato == "jpg":
+                        formato = "jpeg"
+                    if formato not in {"png", "jpeg"}:
+                        try:
+                            pixmap = fitz.Pixmap(document, int(info["xref"]))
+                            if pixmap.n > 4:
+                                pixmap = fitz.Pixmap(fitz.csRGB, pixmap)
+                            conteudo = pixmap.tobytes("png")
+                            formato = "png"
+                        except (RuntimeError, ValueError):
+                            continue
+                    imagens_extraidas.append(
+                        {
+                            "indice": indice,
+                            "pagina": numero_pagina,
+                            "formato": formato,
+                            "largura": int(info.get("width") or 0),
+                            "altura": int(info.get("height") or 0),
+                            "conteudoBase64": base64.b64encode(conteudo).decode("ascii"),
+                        }
+                    )
+                    eventos_imagem.append((bbox[1], f"[[IMAGEM_PDF:{indice}]]"))
+                    bboxes_imagem.append(bbox)
+
                 tabelas_relevantes = [
                     tabela
                     for tabela in page.find_tables().tables
                     if tabela.bbox[3] - tabela.bbox[1] >= 40
+                    and not any(_bboxes_se_sobrepoem(tabela.bbox, bbox) for bbox in bboxes_imagem)
                 ]
                 if tabelas_relevantes:
-                    paginas.append(_extrair_pagina_com_tabelas(page, tabelas_relevantes))
+                    paginas.append(_extrair_pagina_com_tabelas(page, tabelas_relevantes, eventos_imagem))
                     continue
-
-                blocos_textuais = [
-                    bloco[4].strip()
+                eventos = [
+                    (float(bloco[1]), bloco[4].strip())
                     for bloco in page.get_text("blocks", sort=True)
                     if bloco[6] == 0 and bloco[4].strip()
                 ]
-                paginas.append("\n\n".join(blocos_textuais))
-            return "\n\n".join(paginas)
+                eventos.extend(eventos_imagem)
+                paginas.append("\n\n".join(texto for _, texto in sorted(eventos, key=lambda evento: evento[0])))
+            return "\n\n".join(paginas), imagens_extraidas
     except (fitz.FileDataError, RuntimeError, ValueError) as exc:
         raise ValueError("Não foi possível extrair texto do PDF.") from exc
 
+
+def extrair_texto_pdf(pdf_bytes: bytes) -> str:
+    """Mantém o contrato legado de extração exclusivamente textual."""
+    return extrair_texto_e_imagens_pdf(pdf_bytes)[0]
 
 def limpar_texto_pdf(texto: str) -> str:
     linhas_limpas: list[str] = []
@@ -290,6 +390,12 @@ def limpar_texto_pdf(texto: str) -> str:
 def detectar_categoria(texto: str) -> str:
     normalizado = normalized_for_match(texto)
     primeira_linha = texto.splitlines()[0] if texto else ""
+    if _is_image_marker(primeira_linha):
+        return "imagem"
+    if _FIGURE_CAPTION_RE.match(primeira_linha):
+        return "legenda_figura"
+    if normalizado.rstrip(".:") == "LISTA DE VERIFICACAO":
+        return "lista_verificacao"
     texto_sem_item = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*(?:[-–—]\s*)?", "", normalizado)
     if _DOCUMENT_METADATA_RE.match(normalizado):
         return "fragmento_interface"
@@ -670,6 +776,8 @@ def _bloco_e_lista_pontilhada(bloco: list[str]) -> bool:
 def _deve_unir_continuacao(bloco: list[str], seguinte: list[str]) -> bool:
     if not bloco or not seguinte:
         return False
+    if _is_image_marker(bloco[0]) or _is_image_marker(seguinte[0]):
+        return False
     anterior = normalize_whitespace(bloco[-1])
     proxima = normalize_whitespace(seguinte[0])
     if not anterior or not proxima or _SECTION_RE.match(proxima):
@@ -746,6 +854,13 @@ def _agrupar_fragmentos_logicos(
             ):
                 atual.extend(blocos[indice])
                 indice += 1
+            while (
+                indice < len(blocos)
+                and not _is_image_marker(blocos[indice][0] if blocos[indice] else "")
+                and _deve_unir_continuacao(atual, blocos[indice])
+            ):
+                atual.extend(blocos[indice])
+                indice += 1
             agrupados.append(atual)
             continue
 
@@ -793,6 +908,13 @@ def _juntar_linhas_do_bloco(linhas: list[str]) -> str:
         trecho = normalize_whitespace(linha)
         if not trecho:
             continue
+        if linhas_logicas and (
+            _is_image_marker(trecho)
+            or _FIGURE_CAPTION_RE.match(trecho)
+            or _SPECIAL_BLOCK_START_RE.match(trecho)
+        ):
+            linhas_logicas.append(trecho)
+            continue
         if _LIST_ITEM_RE.match(trecho) and linhas_logicas:
             linhas_logicas.append(trecho)
         elif linhas_logicas:
@@ -810,7 +932,24 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
     blocos: list[list[str]] = []
     atual: list[str] = []
     escopo_tabela_linear: str | None = None
-    for linha in texto.splitlines():
+    linhas_expandidas: list[str] = []
+    for linha_original in texto.splitlines():
+        partes = re.split(r"\s+(?=Figura\s+\d+\s*[-–—:])", linha_original)
+        for parte in partes:
+            linhas_expandidas.extend(
+                re.split(
+                    r"\s+(?=(?:Lista\s+de\s+verificação|Observaç(?:ão|ões)\s+(?:preliminares|\d+))\s*[:.])",
+                    parte,
+                    flags=re.IGNORECASE,
+                )
+            )
+    for linha in linhas_expandidas:
+        if _is_image_marker(linha):
+            if atual:
+                blocos.append(atual)
+                atual = []
+            blocos.append([normalize_whitespace(linha)])
+            continue
         if not linha.strip():
             if atual:
                 blocos.append(atual)
@@ -830,6 +969,9 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
             and _ATIVIDADE_TABELA_RE.match(linha) is not None
         )
         marcador_procedimento = normalized_for_match(linha).rstrip(".") == "PROCEDIMENTO"
+        legenda_figura = _FIGURE_CAPTION_RE.match(linha) is not None
+        lista_verificacao = normalized_for_match(linha).rstrip(".:") == "LISTA DE VERIFICACAO"
+        observacao_numerada = re.match(r"^OBSERVA(?:ÇÃO|CAO)\s+\d+\s*[:.]", linha, re.IGNORECASE) is not None
         item_de_lista_standalone = bool(anexo_standalone and _LIST_ITEM_RE.match(linha))
         titulo_raiz_standalone = bool(
             anexo_standalone and re.match(r"^\s*\d+\s*[-–—]\s*\S+", linha)
@@ -843,6 +985,9 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
             or _OPERATIONAL_TABLE_ROW_RE.match(linha)
             or _OPERATIONAL_STAGE_RE.match(linha)
             or marcador_procedimento
+            or legenda_figura
+            or lista_verificacao
+            or observacao_numerada
             or _PROCESS_REFERENCE_RE.match(linha)
             or _TECHNICAL_MARKER_RE.match(linha)
             or fluxograma_standalone
@@ -921,6 +1066,9 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
     etapa_operacional = 0
     titulo_contextual = ""
     ultimo_item_operacional = ""
+    lista_tarefas_raiz = ""
+    tarefa_lista_contextual = ""
+    em_lista_verificacao = False
     anexos_documento_vistos: set[str] = set()
     escopos_explicitos = {"anexo", "tabela_2", "tabela_5", "tabelas_tecnicas"}
     for ordem, linhas in enumerate(blocos, start=1):
@@ -1018,6 +1166,37 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
         if anexo_standalone and not item_padrao_fonte and re.match(r"^\s*\d+\s*[-–—]\s*\S+", bloco_texto):
             item_padrao_fonte = f"{item_numerado_fonte}-"
         item_padrao_detectado = _formatar_item_do_anexo(item_padrao_fonte, escopo_contextual)
+        item_sem_ponto = item_padrao_detectado.rstrip(".")
+        if (
+            item_sem_ponto
+            and "LISTA DE TAREFAS" in normalized_for_match(bloco_texto)
+            and categoria in {"subsecao_numerada", "secao_principal"}
+        ):
+            lista_tarefas_raiz = item_sem_ponto
+            tarefa_lista_contextual = ""
+            em_lista_verificacao = False
+            categoria = "lista_tarefas"
+        elif (
+            lista_tarefas_raiz
+            and item_sem_ponto
+            and item_sem_ponto.startswith(f"{lista_tarefas_raiz}.")
+            and len(item_sem_ponto.split(".")) == len(lista_tarefas_raiz.split(".")) + 1
+        ):
+            categoria = "instrucao_operacional"
+            tarefa_lista_contextual = item_sem_ponto
+            secao_contextual = item_sem_ponto
+            em_lista_verificacao = False
+        elif categoria == "lista_verificacao" and tarefa_lista_contextual:
+            item_padrao_detectado = f"{tarefa_lista_contextual}."
+            secao_contextual = tarefa_lista_contextual
+            em_lista_verificacao = True
+        elif tarefa_lista_contextual and em_lista_verificacao and item_sem_ponto:
+            secao_contextual = tarefa_lista_contextual
+            conteudo_local = _conteudo_item_numerado(bloco_texto)
+            if _ACTION_START_RE.match(conteudo_local) or _texto_tem_acoes_explicitas(conteudo_local):
+                categoria = "instrucao_operacional"
+            else:
+                categoria = "geral"
         item_letra_anexo = _ANEXO_LETTER_ITEM_RE.match(bloco_texto) if anexo_standalone else None
         if passo_operacional:
             numero_passo = passo_operacional.group(1)
@@ -1138,6 +1317,9 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
         )
         if texto_sem_numeracao.lower().startswith("não "):
             categoria = "geral"
+        if normalized_for_match(bloco_texto).startswith("OBSERVACAO"):
+            categoria = "geral"
+            candidato_acao = False
         titulo_estrutural = (
             _eh_titulo_estrutural(linhas[0])
             and not instrucao_numerada
@@ -1164,12 +1346,31 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
             titulo_estrutural = True
         if categoria == "etapa_operacional":
             titulo_estrutural = True
+        if (
+            tarefa_lista_contextual
+            and categoria == "instrucao_operacional"
+            and item_sem_ponto == tarefa_lista_contextual
+        ):
+            titulo_estrutural = False
         if bloco_texto and item_padrao_detectado and (titulo_estrutural or tem_subitens):
             secao_contextual = item_padrao_detectado.rstrip(".")
             titulo_contextual = normalized_for_match(bloco_texto)
             if anexo_standalone and len(secao_contextual.split(".")) == 1:
                 ultimo_item_operacional = ""
         contexto_tarefa: dict[str, str] = {}
+        if categoria == "lista_tarefas":
+            contexto_tarefa = {"listaTarefasRaiz": lista_tarefas_raiz, "nivelLista": "raiz"}
+        elif tarefa_lista_contextual and categoria == "lista_verificacao":
+            contexto_tarefa = {"listaTarefasRaiz": lista_tarefas_raiz, "tarefaLista": tarefa_lista_contextual, "nivelLista": "lista_verificacao"}
+        elif (
+            tarefa_lista_contextual
+            and em_lista_verificacao
+            and categoria == "instrucao_operacional"
+            and not normalized_for_match(bloco_texto).startswith("OBSERVACAO")
+        ):
+            contexto_tarefa = {"listaTarefasRaiz": lista_tarefas_raiz, "tarefaLista": tarefa_lista_contextual, "nivelLista": "item_lista_verificacao"}
+        elif tarefa_lista_contextual and categoria == "instrucao_operacional" and item_sem_ponto == tarefa_lista_contextual:
+            contexto_tarefa = {"listaTarefasRaiz": lista_tarefas_raiz, "tarefaLista": tarefa_lista_contextual, "nivelLista": "tarefa"}
         atividade_encontrada = _ATIVIDADE_TABELA_RE.match(linhas[0]) if escopo_contextual == "tabela_2" else None
         if categoria == "atividade_tabela_2" and atividade_encontrada:
             indice_atividade = atividade_encontrada.group(1)
@@ -1214,6 +1415,11 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
                 ),
                 "identificadorAnexo": identificador_anexo_arquivo,
                 "etapaOperacional": etapa_operacional,
+                "imagemIndice": (
+                    int(_IMAGE_MARKER_RE.fullmatch(bloco_texto).group(1))
+                    if categoria == "imagem" and _IMAGE_MARKER_RE.fullmatch(bloco_texto)
+                    else None
+                ),
             }
         )
     _aplicar_hierarquia_local_do_anexo(resultado)

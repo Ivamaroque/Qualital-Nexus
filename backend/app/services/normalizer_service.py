@@ -14,9 +14,9 @@ def _normalizar_valor(valor: Any, preservar_quebras: bool = False) -> str:
     )
 
 
-def normalizar_linhas(linhas: list[dict[str, Any]]) -> list[dict[str, str]]:
-    normalizadas: list[dict[str, str]] = []
-    vistas: set[tuple[str, str, str, str, str]] = set()
+def normalizar_linhas(linhas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalizadas: list[dict[str, Any]] = []
+    vistas: set[tuple[str, str, str, str, str, str]] = set()
     for linha in linhas:
         descricao = _normalizar_valor(linha.get("descricao"), preservar_quebras=True)
         tipo = _normalizar_valor(linha.get("tipoTarefa"))
@@ -25,7 +25,8 @@ def normalizar_linhas(linhas: list[dict[str, Any]]) -> list[dict[str, str]]:
         if tipo not in _ALLOWED_TYPES:
             tipo = "Informação"
         item = _normalizar_valor(linha.get("itemPadrao"))
-        if not descricao and not (tipo == "Padrão/Anexo" and item):
+        imagem_base64 = _normalizar_valor(linha.get("imagemBase64"))
+        if not descricao and not imagem_base64 and not (tipo == "Padrão/Anexo" and item):
             continue
         subtarefa = _normalizar_valor(linha.get("subtarefaHTA"))
         descricao_tarefa = _normalizar_valor(linha.get("descricaoTarefa"), preservar_quebras=True)
@@ -35,6 +36,7 @@ def normalizar_linhas(linhas: list[dict[str, Any]]) -> list[dict[str, str]]:
             tipo,
             subtarefa,
             " ".join(descricao_tarefa.split()),
+            imagem_base64,
         )
         if chave in vistas:
             continue
@@ -46,6 +48,12 @@ def normalizar_linhas(linhas: list[dict[str, Any]]) -> list[dict[str, str]]:
                 "tipoTarefa": tipo,
                 "subtarefaHTA": subtarefa,
                 "descricaoTarefa": descricao_tarefa,
+                **({
+                    "imagemBase64": imagem_base64,
+                    "imagemFormato": _normalizar_valor(linha.get("imagemFormato")) or "png",
+                    "imagemLargura": int(linha.get("imagemLargura") or 0),
+                    "imagemAltura": int(linha.get("imagemAltura") or 0),
+                } if imagem_base64 else {}),
             }
         )
     return normalizadas

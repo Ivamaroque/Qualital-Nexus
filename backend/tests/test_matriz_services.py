@@ -37,7 +37,12 @@ from app.services.llm_service import (
 from app.services.matrix_structure_service import consolidar_hierarquia_tarefas
 from app.services.normalizer_service import normalizar_linhas
 from app.services.parser_rules_service import filtrar_regras_por_bloco, preparar_blocos_para_ia
-from app.services.pdf_service import _serializar_tabela, limpar_texto_pdf, separar_blocos
+from app.services.pdf_service import (
+    _serializar_tabela,
+    extrair_texto_e_imagens_pdf,
+    limpar_texto_pdf,
+    separar_blocos,
+)
 from app.schemas.matriz import MatrizLinha, MatrizOutput
 from app.services.processing_status import (
     atualizar_processamento,
@@ -140,7 +145,7 @@ class MatrizServicesTest(unittest.TestCase):
         arquivo = UploadFile(filename="teste.pdf", file=io.BytesIO(b"%PDF-1.4 teste"))
 
         with (
-            patch("app.routers.extracao_pdf.extrair_texto_documento", return_value="texto"),
+            patch("app.routers.extracao_pdf.extrair_conteudo_documento", return_value=("texto", [])),
             patch("app.routers.extracao_pdf.limpar_texto_pdf", return_value="texto"),
             patch("app.routers.extracao_pdf.separar_blocos", return_value=blocos),
             patch("app.routers.extracao_pdf.buscar_parser_rules", return_value=[]),
@@ -171,7 +176,10 @@ class MatrizServicesTest(unittest.TestCase):
         arquivo = UploadFile(filename="anexo.doc", file=io.BytesIO(assinatura_doc + b"content"))
 
         with (
-            patch("app.routers.extracao_pdf.extrair_texto_documento", return_value="1. OBJETIVO") as extrator,
+            patch(
+                "app.routers.extracao_pdf.extrair_conteudo_documento",
+                return_value=("1. OBJETIVO", []),
+            ) as extrator,
             patch("app.routers.extracao_pdf.limpar_texto_pdf", return_value="1. OBJETIVO"),
             patch("app.routers.extracao_pdf.separar_blocos", return_value=blocos),
             patch("app.routers.extracao_pdf.buscar_parser_rules", return_value=[]),
@@ -1371,6 +1379,131 @@ class MatrizServicesTest(unittest.TestCase):
                 "Descrição da tarefa (HTA)",
             ),
         )
+
+
+    def test_pdf_image_extraction_filters_repeated_header_artwork(self):
+        try:
+            import fitz
+        except ImportError:
+            self.skipTest("PyMuPDF não instalado")
+
+        png = bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000d49444154789c63606060f80f0001040100b5c1b0e50000000049454e44ae426082"
+        )
+        documento = fitz.open()
+        header_xref = 0
+        for pagina_indice in range(3):
+            pagina = documento.new_page(width=595, height=842)
+            if header_xref:
+                pagina.insert_image(fitz.Rect(20, 10, 80, 40), xref=header_xref)
+            else:
+                header_xref = pagina.insert_image(fitz.Rect(20, 10, 80, 40), stream=png)
+            pagina.insert_text((72, 90), f"Página {pagina_indice + 1}")
+            if pagina_indice == 0:
+                pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 10, 10), False)
+                pixmap.clear_with(255)
+                pagina.insert_image(fitz.Rect(72, 120, 300, 300), stream=pixmap.tobytes("png"))
+
+        texto, imagens = extrair_texto_e_imagens_pdf(documento.tobytes())
+
+        self.assertEqual(len(imagens), 1)
+        self.assertIn("[[IMAGEM_PDF:1]]", texto)
+        self.assertEqual(imagens[0]["pagina"], 1)
+
+    def test_feedback_sample_list_hierarchy_and_visual_blocks(self):
+        blocos = separar_blocos(
+            "3.2 Lista de tarefas\n"
+            "3.2.1 Receber o PIG no recebedor\n"
+            "[[IMAGEM_PDF:1]]\n"
+            "Figura 1 - Recebedor de PIG\n"
+            "Lista de verificação:\n"
+            "1. Seguir os procedimentos de segurança.\n"
+            "3.2.2 Alinhar as válvulas\n"
+            "Figura 2 - Válvulas de entrada dentro do\n"
+            "dique de contenção\n"
+            "Figura 3 - Válvula de saída\n"
+            "Lista de verificação:\n"
+            "1. Alinhar a chegada do riser.\n"
+            "2. Alinhar o recebedor.\n"
+            "2.1 Fechar a válvula de equalização.\n"
+            "3. Alinhar a saída para o tanque.\n"
+            "3.2.3 Testar o sistema\n"
+            "Figura 4 - Foto A Figura 5 - Foto B Figura 6 - Foto C Figura 7 - Foto D\n"
+            "Lista de verificação:\n"
+            "1. Seguir o procedimento de teste.\n"
+            "2. O volume acumulado no recebedor é transferido para o tanque.\n"
+            "Observação 2: Manter a área isolada.\n"
+            "Observação 3: Comunicar a operação.\n"
+            "O QUE FAZER\n"
+            "Realizar testes no sistema.\n"
+            "OBSERVAÇÕES PRELIMINARES\n"
+            "2. Certificar-se de que não haverá interferências.\n"
+            "COMO FAZER:\n"
+            "Certificar-se que o tanque TQ-01 está alinhado e iniciar o teste."
+        )
+        for bloco in blocos:
+            if bloco.get("imagemIndice") == 1:
+                bloco.update({"imagemBase64": "imagem-a", "imagemFormato": "png"})
+        linhas = [
+            linha.model_dump()
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+        consolidadas = consolidar_hierarquia_tarefas(blocos, linhas)
+
+        receber = next(l for l in consolidadas if l["descricao"].startswith("Receber o PIG"))
+        alinhar = next(l for l in consolidadas if l["descricao"] == "Alinhar as válvulas")
+        passiva = next(l for l in consolidadas if "O volume acumulado" in l["descricao"])
+        certificar = next(l for l in consolidadas if "tanque TQ-01" in l["descricao"])
+        legendas = [l["descricao"] for l in consolidadas if l["descricao"].startswith("Figura")]
+        observacoes = [l["descricao"] for l in consolidadas if l["descricao"].startswith("Observação")]
+        como_fazer = _criar_linhas_de_fallback({
+            "ordem": 999,
+            "texto": "COMO FAZER:",
+            "categoria": "como_fazer",
+            "contextoTarefa": {"itemPadrao": "3.2.3.", "subtarefaHTA": "1.3."},
+        })[0].model_dump()
+
+        self.assertEqual(receber["subtarefaHTA"], "1.1.")
+        self.assertEqual(alinhar["subtarefaHTA"], "1.2.")
+        self.assertEqual(passiva["tipoTarefa"], "Informação")
+        self.assertEqual(certificar["tipoTarefa"], "Execução")
+        self.assertEqual(como_fazer["tipoTarefa"], "Título/Subtítulo")
+        self.assertEqual(como_fazer["subtarefaHTA"], "")
+        self.assertEqual(len(legendas), 7)
+        self.assertIn("Figura 2 - Válvulas de entrada dentro do dique de contenção", legendas)
+        self.assertEqual(len(observacoes), 2)
+
+    def test_normalizer_preserves_distinct_images_with_empty_descriptions(self):
+        linhas = normalizar_linhas(
+            [
+                {"tipoTarefa": "Informação", "imagemBase64": "imagem-a", "imagemFormato": "png", "imagemLargura": 10, "imagemAltura": 10},
+                {"tipoTarefa": "Informação", "imagemBase64": "imagem-b", "imagemFormato": "png", "imagemLargura": 10, "imagemAltura": 10},
+            ]
+        )
+
+        self.assertEqual(len(linhas), 2)
+        self.assertEqual([linha["imagemBase64"] for linha in linhas], ["imagem-a", "imagem-b"])
+        csv_text = gerar_csv_matriz(linhas)
+        self.assertEqual(len(list(csv.DictReader(io.StringIO(csv_text.removeprefix("\ufeff")), delimiter=";"))), 0)
+
+    def test_xlsx_embeds_image_in_standard_description_column(self):
+        png_base64 = (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEA"
+            "tcGw5QAAAABJRU5ErkJggg=="
+        )
+        conteudo = gerar_xlsx_matriz(
+            [{"tipoTarefa": "Informação", "imagemBase64": png_base64, "imagemFormato": "png", "imagemLargura": 1, "imagemAltura": 1}]
+        )
+
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as pacote:
+            self.assertIn("xl/media/image1.png", pacote.namelist())
+            desenho = pacote.read("xl/drawings/drawing1.xml").decode("utf-8")
+            self.assertIn("<xdr:col>2</xdr:col>", desenho)
+            self.assertIn("<xdr:row>1</xdr:row>", desenho)
+            planilha = pacote.read("xl/worksheets/sheet1.xml").decode("utf-8")
+            self.assertNotIn(">Informação<", planilha)
 
 
 if __name__ == "__main__":

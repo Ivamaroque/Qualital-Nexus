@@ -50,6 +50,9 @@ _TIPOS_TAREFA_POR_CATEGORIA = {
     "padrao_documento": "Padrão/Anexo",
     "secao_principal": "Título/Subtítulo",
     "titulo_tabela": "Título/Subtítulo",
+    "lista_tarefas": "Título/Subtítulo",
+    "lista_verificacao": "Título/Subtítulo",
+    "legenda_figura": "Informação",
     "objetivo": "Informação",
     "atividade_tabela_2": "Título/Subtítulo",
     "atividade_anomalia": "Informação",
@@ -272,7 +275,7 @@ def _criar_linha_de_fallback(bloco: dict[str, Any]) -> MatrizLinha:
 _ACTION_VERB_RE = (
     r"(?:aborte|abortar|abra|abrir|acione|acionar|acople|acoplar|aguarde|aguardar|ajuste|ajustar|"
     r"alinhe|alinhar|anote|anotar|aperte|apertar|aplique|aplicar|"
-    r"atue|atuar|avalie|avaliar|baixe|baixar|bloqueie|bloquear|clique|clicar|colete|coletar|"
+    r"atue|atuar|avalie|avaliar|baixe|baixar|bloqueie|bloquear|certifique|certificar|clique|clicar|colete|coletar|"
     r"comunique|comunicar|continue|continuar|digite|digitar|escolha|escolher|feche|fechar|"
     r"informe|informar|inspecione|inspecionar|instale|instalar|interrompa|interromper|isole|isolar|"
     r"levante|levantar|ligue|ligar|observe|observar|posicione|posicionar|preencha|preencher|"
@@ -694,6 +697,44 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
     """Preserva a estrutura mínima do PDF quando a IA não cobre um bloco."""
     categoria = bloco.get("categoria")
     linhas_fonte = [linha.strip() for linha in str(bloco.get("texto") or "").splitlines() if linha.strip()]
+    if linhas_fonte and normalized_for_match(" ".join(linhas_fonte)).rstrip(":") in {
+        "COMO FAZER",
+        "PORQUE FAZER",
+        "O QUE FAZER",
+        "OBSERVACOES PRELIMINARES",
+    }:
+        return [
+            MatrizLinha(
+                ordemBloco=bloco["ordem"],
+                descricao=" ".join(linhas_fonte).rstrip(":"),
+                tipoTarefa="Título/Subtítulo",
+            )
+        ]
+    if categoria in {"lista_tarefas", "lista_verificacao"} and linhas_fonte:
+        item_padrao = str(bloco.get("itemPadraoDetectado") or "")
+        descricao = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*", "", " ".join(linhas_fonte)).strip(" .:")
+        return [
+            MatrizLinha(
+                ordemBloco=bloco["ordem"],
+                itemPadrao=item_padrao,
+                descricao=descricao,
+                tipoTarefa="Título/Subtítulo",
+            )
+        ]
+    if categoria == "legenda_figura" and linhas_fonte:
+        return [MatrizLinha(ordemBloco=bloco["ordem"], descricao=" ".join(linhas_fonte), tipoTarefa="Informação")]
+    contexto_lista = bloco.get("contextoTarefa") or {}
+    if contexto_lista.get("nivelLista") in {"tarefa", "item_lista_verificacao"} and linhas_fonte:
+        descricao = _texto_fonte_sem_item(bloco)
+        return [
+            MatrizLinha(
+                ordemBloco=bloco["ordem"],
+                itemPadrao=str(bloco.get("itemPadraoDetectado") or ""),
+                descricao=descricao,
+                tipoTarefa="Execução",
+                descricaoTarefa=_normalizar_acao_para_infinitivo(descricao),
+            )
+        ]
     if categoria == "anexo_documento" and linhas_fonte:
         anexo = re.match(r"^ANEXO\s+([A-Z]\d*)\b\s*(.*)$", linhas_fonte[0], re.IGNORECASE)
         if anexo:

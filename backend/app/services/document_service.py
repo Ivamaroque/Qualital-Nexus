@@ -11,7 +11,7 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 from lxml.etree import XMLSyntaxError
 
-from app.services.pdf_service import extrair_texto_pdf
+from app.services.pdf_service import extrair_texto_e_imagens_pdf
 
 
 EXTENSOES_DOCUMENTO_ACEITAS = {".pdf", ".doc", ".docx"}
@@ -164,15 +164,21 @@ def _extrair_texto_docx(conteudo: bytes) -> str:
     return texto
 
 
-def extrair_texto_documento(conteudo: bytes, filename: str) -> str:
+def extrair_conteudo_documento(conteudo: bytes, filename: str) -> tuple[str, list[dict]]:
+    """Extrai o texto e os recursos visuais relevantes de um documento."""
     extensao = validar_documento(filename, conteudo)
     if extensao == ".pdf":
-        return extrair_texto_pdf(conteudo)
+        return extrair_texto_e_imagens_pdf(conteudo)
     if extensao == ".doc":
         if conteudo.startswith(b"PK"):
             try:
-                return _extrair_texto_docx(conteudo)
+                return _extrair_texto_docx(conteudo), []
             except ValueError as exc:
                 raise ValueError("O arquivo DOC compactado não contém um DOCX legível.") from exc
-        return _extrair_texto_doc(conteudo)
-    return _extrair_texto_docx(conteudo)
+        return _extrair_texto_doc(conteudo), []
+    return _extrair_texto_docx(conteudo), []
+
+
+def extrair_texto_documento(conteudo: bytes, filename: str) -> str:
+    """Mantém o contrato legado para consumidores exclusivamente textuais."""
+    return extrair_conteudo_documento(conteudo, filename)[0]

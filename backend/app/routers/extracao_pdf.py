@@ -10,7 +10,7 @@ from starlette.datastructures import UploadFile
 
 from app.core.config import get_settings
 from app.services.csv_service import gerar_csv_matriz
-from app.services.document_service import extrair_texto_documento
+from app.services.document_service import extrair_conteudo_documento
 from app.services.llm_service import LLMConversionError, converter_blocos_com_ia
 from app.services.matrix_structure_service import consolidar_hierarquia_tarefas
 from app.services.normalizer_service import normalizar_linhas
@@ -172,9 +172,20 @@ async def _processar_arquivos(
                 detail=f"{filename} excede o limite de {settings.max_file_size_mb} MB.",
             )
         try:
-            texto = await run_in_threadpool(extrair_texto_documento, conteudo, filename)
+            texto, imagens = await run_in_threadpool(extrair_conteudo_documento, conteudo, filename)
             texto_limpo = await run_in_threadpool(limpar_texto_pdf, texto)
             blocos = await run_in_threadpool(separar_blocos, texto_limpo, filename)
+            imagens_por_indice = {int(imagem["indice"]): imagem for imagem in imagens}
+            for bloco in blocos:
+                indice_imagem = bloco.get("imagemIndice")
+                if indice_imagem is not None and indice_imagem in imagens_por_indice:
+                    imagem = imagens_por_indice[indice_imagem]
+                    bloco.update({
+                        "imagemBase64": imagem["conteudoBase64"],
+                        "imagemFormato": imagem["formato"],
+                        "imagemLargura": imagem["largura"],
+                        "imagemAltura": imagem["altura"],
+                    })
             if not blocos:
                 raise ValueError("Nenhum bloco técnico foi identificado.")
         except ValueError as exc:
@@ -188,8 +199,9 @@ async def _processar_arquivos(
     for arquivo_preparado in arquivos_preparados:
         blocos_preparados = await run_in_threadpool(preparar_blocos_para_ia, arquivo_preparado["blocos"], regras)
         arquivo_preparado["blocos"] = blocos_preparados
+        blocos_para_ia = [bloco for bloco in blocos_preparados if bloco.get("categoria") != "imagem"]
         arquivo_preparado["lotes"] = _agrupar_blocos(
-            blocos_preparados,
+            blocos_para_ia,
             min(settings.extraction_batch_max_chars, _MAXIMO_CARACTERES_POR_LOTE),
         )
 
@@ -214,7 +226,19 @@ async def _processar_arquivos(
         file_order = arquivo_preparado["file_order"]
         blocos = arquivo_preparado["blocos"]
         lotes = arquivo_preparado["lotes"]
-        linhas_arquivo: list[dict[str, Any]] = []
+        linhas_arquivo: list[dict[str, Any]] = [
+            {
+                "ordemBloco": bloco["ordem"],
+                "descricao": "",
+                "tipoTarefa": "Informação",
+                "imagemBase64": bloco["imagemBase64"],
+                "imagemFormato": bloco["imagemFormato"],
+                "imagemLargura": bloco["imagemLargura"],
+                "imagemAltura": bloco["imagemAltura"],
+            }
+            for bloco in blocos
+            if bloco.get("categoria") == "imagem" and bloco.get("imagemBase64")
+        ]
         for lote_order, lote in enumerate(lotes, start=1):
             regras_bloco = _regras_do_lote(regras, lote)
             exemplos_parser = _exemplos_parser_do_lote(regras_bloco)
@@ -321,6 +345,7 @@ async def _processar_arquivos(
                     )
                     debug["exemplos_parser_por_bloco"].append({**identificador, "quantidade": len(exemplos_parser)})
                     debug["regras_usadas_por_bloco"].append({**identificador, "regras": regras_bloco})
+        linhas_arquivo.sort(key=lambda linha: int(linha.get("ordemBloco") or 0))
         raiz_inicial = _proxima_raiz_hta(acumuladas)
         linhas_arquivo = await run_in_threadpool(
             consolidar_hierarquia_tarefas,
