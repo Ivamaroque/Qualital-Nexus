@@ -6,10 +6,13 @@ import { useRouter } from "next/navigation";
 import qLogo from "@/app/assets/Q_logo.png";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 
+const AUTH_REQUEST_TIMEOUT_MS = 15000;
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -51,10 +54,17 @@ export default function LoginPage() {
         return;
       }
 
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
+      const { error } = await Promise.race([
+        supabase.auth.signInWithPassword({
+          email,
+          password
+        }),
+        new Promise<never>((_, reject) => {
+          window.setTimeout(() => {
+            reject(new Error("O serviço de autenticação demorou para responder."));
+          }, AUTH_REQUEST_TIMEOUT_MS);
+        })
+      ]);
 
       if (error) {
         const friendlyError =
@@ -140,14 +150,41 @@ export default function LoginPage() {
                   <span aria-hidden="true" className="login-input-icon">●</span>
                   <input
                     autoComplete="current-password"
-                    className="login-input"
+                    className="login-input login-input--password"
                     name="password"
                     onChange={(event) => setPassword(event.target.value)}
                     placeholder="Digite sua senha"
                     required
-                    type="password"
+                    type={isPasswordVisible ? "text" : "password"}
                     value={password}
                   />
+                  <button
+                    aria-label={isPasswordVisible ? "Ocultar senha" : "Exibir senha"}
+                    aria-pressed={isPasswordVisible}
+                    className="login-password-toggle"
+                    onClick={() => setIsPasswordVisible((current) => !current)}
+                    type="button"
+                  >
+                    <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+                      <path
+                        d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="1.8"
+                      />
+                      {isPasswordVisible ? (
+                        <path
+                          d="m4 4 16 16"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeWidth="1.8"
+                        />
+                      ) : (
+                        <circle cx="12" cy="12" r="2.5" fill="currentColor" />
+                      )}
+                    </svg>
+                  </button>
                 </span>
               </label>
 

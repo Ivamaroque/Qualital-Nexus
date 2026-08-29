@@ -5,40 +5,41 @@ type ProcessingStepsProps = {
 };
 
 export function ProcessingSteps({ steps, activeIndex, isProcessing }: ProcessingStepsProps) {
+  const visibleStepIndex = isProcessing ? activeIndex : 0;
+  const completedPercentage = Math.min(Math.round((visibleStepIndex / steps.length) * 100), 100);
+  const currentStep = isProcessing ? steps[Math.min(activeIndex, steps.length - 1)] : "Pronto para iniciar";
+  const description = isProcessing
+    ? "O processamento está em andamento. Você pode acompanhar as atualizações abaixo."
+    : "Adicione arquivos à fila e inicie o processamento.";
+
   return (
-    <section className="surface card card--compact stack" aria-label="Status de processamento">
-      <div className="row row--between">
+    <section aria-label="Status do processamento" aria-live="polite" className="extraction-status-card">
+      <div className="extraction-card-header">
         <div>
-          <p className="eyebrow">Processamento</p>
-          <h3 className="title" style={{ fontSize: "1.1rem", marginTop: 6 }}>
-            Etapas em andamento
-          </h3>
+          <p className="extraction-card-eyebrow">Processamento</p>
+          <h2>Status da Extração</h2>
         </div>
-        <span className="badge">{isProcessing ? "Executando" : "Aguardando"}</span>
+        <span className={isProcessing ? "extraction-status-pill extraction-status-pill--processing" : "extraction-status-pill"}>
+          {isProcessing ? "Em andamento" : "Aguardando"}
+        </span>
       </div>
 
-      <div className="step-list">
-        {steps.map((step, index) => {
-          const isDone = activeIndex > index;
-          const isActive = activeIndex === index && isProcessing;
-
-          return (
-            <div
-              className={`step-item ${isDone ? "step-item--done" : ""} ${isActive ? "step-item--active" : ""}`}
-              key={step}
-            >
-              <span className="step-item__dot" aria-hidden="true" />
-              <div>
-                <p className="text text--strong" style={{ marginBottom: 2 }}>
-                  {index + 1}. {step}
-                </p>
-                <p className="text text--xs">
-                  {isDone ? "Concluído" : isActive ? "Em execução agora" : "Aguardando início"}
-                </p>
-              </div>
-            </div>
-          );
-        })}
+      <div className="extraction-progress-panel">
+        <div className="extraction-progress-summary">
+          <strong>{currentStep}</strong>
+          <span>{completedPercentage}%</span>
+        </div>
+        <div
+          aria-label={`${completedPercentage}% concluído`}
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={completedPercentage}
+          className="extraction-progress-track"
+          role="progressbar"
+        >
+          <span style={{ width: `${completedPercentage}%` }} />
+        </div>
+        <p>{description}</p>
       </div>
     </section>
   );

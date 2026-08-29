@@ -53,7 +53,7 @@ export function FileUploadArea({ onFilesSelected, fileCount, errorMessage, disab
             <h2 className="title" style={{ fontSize: "1.3rem" }}>
               Arraste e solte documentos aqui
             </h2>
-            <p className="text text--sm">Extensões permitidas neste MVP: {getAllowedExtractionFileLabel()}.</p>
+            <p className="text text--sm">Extensões permitidas: {getAllowedExtractionFileLabel()}.</p>
           </div>
           <button
             className="button button--secondary"

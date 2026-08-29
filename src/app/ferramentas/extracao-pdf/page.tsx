@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AppHeader } from "@/components/AppHeader";
 import { FileOrderList } from "@/components/FileOrderList";
 import { FileUploadArea } from "@/components/FileUploadArea";
 import { ProcessingSteps } from "@/components/ProcessingSteps";
-import { useAuthenticatedProfile } from "@/hooks/useAuthenticatedProfile";
 import { isAllowedExtractionFile } from "@/lib/fileValidation";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 import { processarExtracaoPdf } from "@/services/extracaoPdfService";
@@ -56,7 +55,6 @@ function createQueueFile(file: File): QueueFile {
 }
 
 function ExtracaoPdfContent() {
-  const { displayName, notice: profileNotice, userEmail } = useAuthenticatedProfile();
   const [files, setFiles] = useState<QueueFile[]>([]);
   const [selectedFileError, setSelectedFileError] = useState<string | null>(null);
   const [processingError, setProcessingError] = useState<string | null>(null);
@@ -77,10 +75,6 @@ function ExtracaoPdfContent() {
     };
   }, [resultUrl]);
 
-  const selectedCountLabel = useMemo(
-    () => `${files.length} arquivo${files.length === 1 ? "" : "s"} selecionado${files.length === 1 ? "" : "s"}`,
-    [files.length]
-  );
 
   function resetResultState() {
     setResultFilename(null);
@@ -126,6 +120,17 @@ function ExtracaoPdfContent() {
     setSelectedFileError(null);
   }
 
+  function reorderFiles(sourceIndex: number, targetIndex: number) {
+    setFiles((current) => {
+      const next = [...current];
+      const [selected] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, selected);
+      return next;
+    });
+
+    resetResultState();
+    setSelectedFileError(null);
+  }
   function removeFile(index: number) {
     setFiles((current) => current.filter((_, currentIndex) => currentIndex !== index));
     resetResultState();
@@ -231,38 +236,20 @@ function ExtracaoPdfContent() {
   }
 
   return (
-    <main className="page-shell">
-      <div className="container stack stack--xl">
-        <AppHeader
-          title="Extração de documentos"
-          subtitle="Envie documentos técnicos em PDF, DOC ou DOCX e receba uma matriz XLSX estruturada."
-          userEmail={userEmail}
-          userName={displayName}
-        />
+    <main className="extraction-page">
+      <AppHeader title="Extração de documentos" />
 
-        <section className="surface card stack hero">
+      <div className="extraction-content stack stack--xl">
+        <section className="extraction-hero">
           <div className="stack" style={{ gap: 12 }}>
             <p className="eyebrow">Ferramenta operacional</p>
             <h2 className="title title--lg">Envie os documentos na ordem desejada e acompanhe o processamento em etapas.</h2>
             <p className="text text--sm">
-              Este fluxo já preserva a ordenação visual dos arquivos para a futura chamada real ao backend FastAPI em multipart/form-data.
+              Organize os arquivos na fila conforme a sequência de leitura desejada. Ao final, a planilha estará disponível para download.
             </p>
-          </div>
-
-          <div className="row">
-            <span className="badge">{selectedCountLabel}</span>
-            <span className="badge">API: POST /api/extracao-pdf/process</span>
           </div>
         </section>
 
-        {profileNotice ? (
-          <div
-            className="alert alert--warning"
-            role="status"
-          >
-            {profileNotice}
-          </div>
-        ) : null}
         {selectedFileError ? (
           <div
             className="alert alert--error"
@@ -280,8 +267,8 @@ function ExtracaoPdfContent() {
           </div>
         ) : null}
 
-        <div className="grid grid--two" style={{ alignItems: "start" }}>
-          <div className="stack stack--lg">
+        <div className="extraction-grid">
+          <div className="extraction-actions">
             <FileUploadArea
               disabled={isProcessing}
               errorMessage={selectedFileError}
@@ -292,55 +279,33 @@ function ExtracaoPdfContent() {
             <FileOrderList
               disabled={isProcessing}
               files={files}
+              canProcess={canProcess}
               onMoveDown={(index) => moveFile(index, 1)}
               onMoveUp={(index) => moveFile(index, -1)}
+              onProcess={handleProcessFiles}
+              onReorder={reorderFiles}
               onRemove={removeFile}
             />
-
-            <section className="surface card card--compact stack">
-              <div className="row row--between">
-                <div>
-                  <p className="eyebrow">Ação principal</p>
-                  <h3 className="title" style={{ fontSize: "1.1rem", marginTop: 6 }}>
-                    Processar arquivos e gerar o XLSX
-                  </h3>
-                </div>
-                <span className="badge">{canProcess ? "Pronto" : isProcessing ? "Em processamento" : "Sem arquivos"}</span>
-              </div>
-
-              <div className="row">
-                <button className="button button--primary" type="button" onClick={handleProcessFiles} disabled={!canProcess}>
-                  {isProcessing ? (
-                    <>
-                      <span className="spinner" aria-hidden="true" />
-                      Processando
-                    </>
-                  ) : (
-                    "Processar arquivos"
-                  )}
-                </button>
-
-                <span className="text text--xs">A ordem de envio é a mesma exibida na fila acima.</span>
-              </div>
-            </section>
           </div>
 
-          <div className="stack stack--lg">
+          <div className="extraction-monitoring">
             <ProcessingSteps
               activeIndex={processingStepByStage[processingProgress?.etapa ?? "envio"] ?? 0}
               isProcessing={isProcessing}
               steps={processingSteps}
             />
 
-            <section className="surface card card--compact stack" aria-live="polite" aria-label="Console de depuração">
+            <section className="extraction-terminal-card" aria-live="polite" aria-label="Acompanhamento ao vivo">
               <div className="row row--between">
                 <div>
-                  <p className="eyebrow">Console de depuração</p>
-                  <h3 className="title" style={{ fontSize: "1.1rem", marginTop: 6 }}>
-                    Status em tempo real
-                  </h3>
+                  <p className="extraction-card-eyebrow">Acompanhamento ao vivo</p>
+                  <h2>Atualizações do processamento</h2>
                 </div>
-                <span className="badge">{processingProgress?.status ?? "Aguardando"}</span>
+                {isProcessing || processingProgress?.status === "erro" ? (
+                  <span className="extraction-status-pill extraction-status-pill--processing">
+                    {processingProgress?.status === "erro" ? "Atenção" : "Atualizando"}
+                  </span>
+                ) : null}
               </div>
               <div className={`debug-console ${processingProgress?.status === "erro" ? "debug-console--error" : ""}`}>
                 <p>{processingProgress?.mensagem ?? "O status do processamento aparecerá aqui após o envio."}</p>
@@ -379,30 +344,32 @@ function ExtracaoPdfContent() {
                 ) : null}
               </div>
             </section>
-
-            <section className="surface card card--compact stack">
-              <p className="eyebrow">Resultado</p>
-              <h3 className="title" style={{ fontSize: "1.1rem" }}>
-                XLSX de saída
-              </h3>
-
-              {resultUrl && resultFilename ? (
-                <>
-                  <div
-                    className="alert alert--success"
-                    role="status"
-                  >
-                    Processamento concluído. O arquivo {resultFilename} está pronto para download.
-                  </div>
-                  <button className="button button--primary" type="button" onClick={downloadResult}>
-                    Baixar XLSX
-                  </button>
-                </>
-              ) : (
-                <div className="panel">
-                  <p className="text">O resultado final será exibido aqui após o processamento dos arquivos.</p>
+            <section className="extraction-result-card">
+              <div className="extraction-card-header">
+                <div>
+                  <p className="extraction-card-eyebrow">Resultado</p>
+                  <h2>XLSX de saída</h2>
                 </div>
-              )}
+                <span className={resultUrl && resultFilename ? "extraction-status-pill extraction-status-pill--ready" : "extraction-status-pill"}>
+                  {resultUrl && resultFilename ? "Disponível" : "Aguardando"}
+                </span>
+              </div>
+
+              <div className="extraction-card-footer extraction-card-footer--result">
+                <p className="extraction-result-file">
+                  {resultUrl && resultFilename
+                    ? `Arquivo pronto: ${resultFilename}`
+                    : "O arquivo será disponibilizado após o processamento."}
+                </p>
+                <button
+                  className="extraction-download-button"
+                  disabled={!resultUrl || !resultFilename}
+                  onClick={downloadResult}
+                  type="button"
+                >
+                  Baixar XLSX
+                </button>
+              </div>
             </section>
           </div>
         </div>
