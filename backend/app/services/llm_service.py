@@ -284,8 +284,37 @@ _ACTION_VERB_RE = (
     r"confirmar|contatar|desligar|emitir|encaminhar|entrar\s+em\s+contato|estabelecer|executar|"
     r"fechar|informar|iniciar|inspecionar|instalar|liberar|manter|medir|monitorar|operar|parar|"
     r"preencher|proceder|registrar|remover|reparar|restabelecer|retirar|seguir|sinalizar|"
-    r"solicitar|tomar|transportar|travar|verificar)"
+    r"solicitar|tomar|transportar|travar|verificar|efetuar[aá]|fazer|lan[cç]ar|mobilizar)"
 )
+_MODAL_ACTION_RE = (
+    r"(?:dever[aá]|dever[aã]o|devem-se|deve-se|devem|deve|recomenda-se|poder[aá])"
+)
+_FUTURE_PASSIVE_ACTION_RE = re.compile(
+    r"\bser(?:á|ão)\s+"
+    r"(?P<participle>realizad[oa]s?|registrad[oa]s?|lan[cç]ad[oa]s?|"
+    r"preenchid[oa]s?|comunicad[oa]s?)\b(?P<rest>.*)",
+    re.IGNORECASE,
+)
+_PASSIVE_TO_INFINITIVE = {
+    "acionad": "Acionar",
+    "bloquead": "Bloquear",
+    "colocad": "Colocar",
+    "comunicad": "Comunicar",
+    "dad": "Dar",
+    "lançad": "Lançar",
+    "lancad": "Lançar",
+    "mantid": "Manter",
+    "mobilizad": "Mobilizar",
+    "preenchid": "Preencher",
+    "realizad": "Realizar",
+    "registrad": "Registrar",
+    "solicitad": "Solicitar",
+    "tomad": "Tomar",
+}
+_FINITE_ACTION_TO_INFINITIVE = {
+    "efetuará": "Efetuar",
+    "efetuara": "Efetuar",
+}
 _GERUND_TO_INFINITIVE = {
     "acompanhando": "Acompanhar",
     "alinhando": "Alinhar",
@@ -338,7 +367,8 @@ _IMPERATIVE_TO_INFINITIVE = {
 }
 _CONDITIONAL_PREFIX_RE = re.compile(
     r"^(?:ap[oó]s\b|antes\s+de\b|caso\b|com\s+base\b|depois\s+de\b|"
-    r"durante\b|em\s+casos?\b|enquanto\b|no\s+caso\b|nos\s+casos?\b|"
+    r"considerando\b|durante\b|em\s+casos?\b|enquanto\b|havendo\b|"
+    r"no\s+caso\b|nos\s+casos?\b|"
     r"ocorrendo\b|para\s+(?:o|a|os|as)\b|quando\b|se\b)",
     re.IGNORECASE,
 )
@@ -371,13 +401,10 @@ def _normalizar_acao_para_infinitivo(texto: str) -> str:
     acao = texto.strip(" ;,.·")
     acao = re.sub(r"^(?:COMO\s+FAZER\s*:\s*)", "", acao, flags=re.IGNORECASE)
     acao = re.sub(r"^[A-Z]\s*[.)]\s*", "", acao, flags=re.IGNORECASE)
-    modal = re.match(r"^(?:deverá|deverão|deve-se|devem-se|recomenda-se|poderá)\s+(.+)$", acao, re.IGNORECASE)
+    modal = re.match(rf"^{_MODAL_ACTION_RE}\s+(.+)$", acao, re.IGNORECASE)
     if modal:
         acao = modal.group(1).strip()
-    acao = re.sub(r"^ser\s+solicitad[oa]\b", "Solicitar", acao, flags=re.IGNORECASE)
-    acao = re.sub(r"^ser\s+bloquead[oa]\b", "Bloquear", acao, flags=re.IGNORECASE)
-    acao = re.sub(r"^ser\s+tomad[oa]s?\b", "Tomar", acao, flags=re.IGNORECASE)
-    acao = re.sub(r"^ser\s+colocad[oa]\b", "Colocar", acao, flags=re.IGNORECASE)
+    acao = _converter_passiva_para_ativa(acao)
     # Recupera o erro textual comum "deve-se para X, alinhar..." somente quando
     # a continuação comprova que se trata do verbo "parar", não da preposição.
     acao = re.sub(
@@ -390,12 +417,57 @@ def _normalizar_acao_para_infinitivo(texto: str) -> str:
     infinitivo = (
         _GERUND_TO_INFINITIVE.get(primeira_palavra.lower())
         or _IMPERATIVE_TO_INFINITIVE.get(primeira_palavra.lower())
+        or _FINITE_ACTION_TO_INFINITIVE.get(primeira_palavra.lower())
     )
     if infinitivo:
         acao = infinitivo + acao[len(primeira_palavra):]
     if acao:
         acao = acao[0].upper() + acao[1:]
     return acao.rstrip(" ;") + ("." if acao and acao[-1] not in ".!?" else "")
+
+
+def _infinitivo_do_participio(participio: str) -> str:
+    radical = normalized_for_match(participio).lower()
+    for prefixo, infinitivo in _PASSIVE_TO_INFINITIVE.items():
+        if radical.startswith(prefixo):
+            return infinitivo
+    return ""
+
+
+def _converter_passiva_para_ativa(texto: str, sujeito: str = "") -> str:
+    correspondencia = re.match(
+        r"^ser\s+(?P<participle>[\wÀ-ÿ-]+)\b\s*(?P<rest>.*)$",
+        texto.strip(),
+        re.IGNORECASE,
+    )
+    if not correspondencia:
+        return texto
+    infinitivo = _infinitivo_do_participio(correspondencia.group("participle"))
+    if not infinitivo:
+        return texto
+    sujeito = re.sub(
+        r"^(O|A|Os|As|Um|Uma|Uns|Umas|Todo|Toda|Todos|Todas)\b",
+        lambda correspondencia: correspondencia.group(1).lower(),
+        sujeito.strip(),
+    )
+    complemento = " ".join(
+        parte
+        for parte in (sujeito, correspondencia.group("rest").strip())
+        if parte
+    )
+    return f"{infinitivo} {complemento}".strip()
+
+
+def _sujeito_antes_do_modal(prefixo: str) -> str:
+    sujeito = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*", "", prefixo).strip(" ,;")
+    if "," in sujeito:
+        sujeito = sujeito.rsplit(",", maxsplit=1)[-1].strip()
+    sujeito = re.sub(r"\b(?:apenas|somente|s[oó])\s*$", "", sujeito, flags=re.IGNORECASE).strip()
+    if not sujeito or _CONDITIONAL_PREFIX_RE.match(sujeito):
+        return ""
+    if len(sujeito.split()) > 24:
+        return ""
+    return sujeito
 
 
 def _extrair_contexto_condicional(prefixo: str) -> str:
@@ -406,13 +478,21 @@ def _extrair_contexto_condicional(prefixo: str) -> str:
     sujeito_final = partes[1].strip() if len(partes) == 2 else ""
     if len(partes) == 2 and (
         re.fullmatch(
-            r"(?:o|a|os|as)\s+(?:[\wÀ-ÿ./-]+\s*){1,8}",
+            r"(?:o|a|os|as|um|uma|uns|umas|todo|toda|todos|todas)\s+"
+            r"(?:[\wÀ-ÿ./-]+\s*){1,8}",
             sujeito_final,
             re.IGNORECASE,
         )
         or re.fullmatch(r"(?:este|esta|estes|estas)", sujeito_final, re.IGNORECASE)
     ):
         contexto = partes[0].strip()
+    contexto = re.sub(
+        r"\s+tod[oa]s?\s+equipe(?:\s+de\s+[\wÀ-ÿ./-]+)*"
+        r"(?:\s+e\s+[\wÀ-ÿ./-]+)?$",
+        "",
+        contexto,
+        flags=re.IGNORECASE,
+    ).strip()
     contexto = re.sub(
         r"(?:,\s*)?\b(?:apenas|somente|s[oó])$",
         "",
@@ -457,6 +537,13 @@ def _resolver_referencias_locais(acao: str, fonte_anterior: str) -> str:
         return acao
     acao = re.sub(r"\bque\s+a\s+mesma\b", f"que {entidade}", acao, flags=re.IGNORECASE)
     acao = re.sub(r"^Bloquear\s+em\b", f"Bloquear {entidade} em", acao, flags=re.IGNORECASE)
+    acao = re.sub(
+        r"^(Bloquear|Comunicar|Manter|Mobilizar|Registrar|Solicitar)\s+"
+        r"(?:este|esta|estes|estas)\b",
+        rf"\1 {entidade}",
+        acao,
+        flags=re.IGNORECASE,
+    )
     return acao
 
 
@@ -495,15 +582,28 @@ def _extrair_acoes_explicitas(texto: str) -> list[str]:
             sentenca,
             flags=re.IGNORECASE,
         )
-        modal = re.search(r"\b(?:deverá|deverão|deve-se|devem-se|recomenda-se|poderá)\s+(.+)", sentenca, re.IGNORECASE)
+        modal = re.search(rf"\b{_MODAL_ACTION_RE}\s+(.+)", sentenca, re.IGNORECASE)
+        passiva_futura = _FUTURE_PASSIVE_ACTION_RE.search(sentenca)
         inicio = re.match(rf"^\s*{_ACTION_VERB_RE}\b.+", sentenca, re.IGNORECASE)
         acao_interna = re.search(rf"\b{_ACTION_VERB_RE}\b.+", sentenca, re.IGNORECASE)
-        trecho = modal.group(1) if modal else sentenca if inicio else acao_interna.group(0) if acao_interna else ""
+        trecho = (
+            modal.group(1)
+            if modal
+            else f"ser {passiva_futura.group('participle')}{passiva_futura.group('rest')}"
+            if passiva_futura
+            else sentenca
+            if inicio
+            else acao_interna.group(0)
+            if acao_interna
+            else ""
+        )
         if not trecho:
             continue
         inicio_trecho = (
             modal.start()
             if modal
+            else passiva_futura.start()
+            if passiva_futura
             else inicio.start()
             if inicio
             else acao_interna.start()
@@ -513,6 +613,11 @@ def _extrair_acoes_explicitas(texto: str) -> list[str]:
         fonte_anterior = sentenca[:inicio_trecho]
         contexto = _extrair_contexto_condicional(fonte_anterior)
         for parte in _separar_acoes_coordenadas(trecho):
+            if re.match(r"^ser\s+", parte, re.IGNORECASE):
+                parte = _converter_passiva_para_ativa(
+                    parte,
+                    _sujeito_antes_do_modal(fonte_anterior),
+                )
             acao = _normalizar_acao_para_infinitivo(parte)
             if acao:
                 acao = _resolver_referencias_locais(acao, fonte_anterior)

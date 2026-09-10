@@ -12,6 +12,10 @@ _UNDERSCORE_RE = re.compile(r"^[_\-]{3,}$")
 _SECTION_RE = re.compile(r"^(?:\d+\.|\d+\.\d+(?:\.\d+){0,6}\.?)\s+(?:[-–—]\s*)?.+")
 _ITEM_PADRAO_RE = re.compile(r"^\s*(\d+\.(?:\d+\.)*|\d+(?:\.\d+)+)(?=\s|[-–—]|$)")
 _TABLE_RE = re.compile(r"^(?:tabela\s*\d+|quadro\s*\d+|anexo\s+[a-z])\b", re.IGNORECASE)
+_OPERATIONAL_TABLE_SCOPE_RE = re.compile(
+    r"\b(?:ETAPAS?|ATIVIDADES?|EXECU[CÇ][AÃ]O|O\s+QUE\s+FAZER)\b",
+    re.IGNORECASE,
+)
 _LIST_ITEM_RE = re.compile(r"^(?:[•·▪◦*-]|\d+[.)-]|\d+\s*[-–—])\s+\S+")
 _PROCESS_REFERENCE_RE = re.compile(r"^N\d+\s*[-–—]\s+", re.IGNORECASE)
 _DOCUMENT_CODE_RE = re.compile(r"^(?:PE|PG|PR|PP)-[A-Z0-9]+-\d{5}\b", re.IGNORECASE)
@@ -115,7 +119,7 @@ _ACTION_START_RE = re.compile(
     re.IGNORECASE,
 )
 _ACTION_CUE_RE = re.compile(
-    r"\b(?:dever[aá]|dever[aã]o|deve-se|recomenda-se|abortar|abrir|aguardar|isolar|ligar|"
+    r"\b(?:dever[aá]|dever[aã]o|deve-se|devem-se|deve|devem|recomenda-se|abortar|abrir|aguardar|isolar|ligar|"
     r"realizar|solicitar|bloquear|acionar|"
     r"informar\s+imediatamente|entrar\s+em\s+contato|parar\s+os?|alinhar\s+para|"
     r"estabelecer\s+(?:a\s+)?comunica[cç][aã]o|confirmar\s+que|avaliar\s+(?:o|a)|"
@@ -453,8 +457,10 @@ def detectar_escopo(texto: str) -> str:
     if normalizado.startswith("ANEXO"):
         return "anexo"
     tabela = re.match(r"^TABELA\s*(\d+)\b", normalizado)
-    if tabela and tabela.group(1) in {"2", "5"}:
-        return f"tabela_{tabela.group(1)}"
+    if tabela and tabela.group(1) == "2":
+        return "tabela_2" if _OPERATIONAL_TABLE_SCOPE_RE.search(normalizado) else "tabelas_tecnicas"
+    if tabela and tabela.group(1) == "5":
+        return "tabela_5"
     if normalizado.startswith(("TABELA", "QUADRO")):
         return "tabelas_tecnicas"
     return "documento_principal" if _SECTION_RE.match(texto) else "geral"
@@ -479,6 +485,8 @@ def _inicia_secao_documento_fora_da_tabela(texto: str) -> bool:
     """Distingue uma seção do documento de uma atividade numerada dentro de uma tabela."""
     primeira_linha = texto.splitlines()[0] if texto else ""
     if re.match(r"^\d+(?:\.\d+)+\.?\s*[-–—]", primeira_linha):
+        return True
+    if re.match(r"^\d+(?:\.\d+){2,}\.?\s+\S+", primeira_linha):
         return True
     return re.fullmatch(
         r"\d+\.\s+(?:OBJETIVO|APLICAÇÃO|DESCRIÇÃO|REGISTROS|DEFINIÇÕES)",
@@ -780,7 +788,16 @@ def _deve_unir_continuacao(bloco: list[str], seguinte: list[str]) -> bool:
         return False
     anterior = normalize_whitespace(bloco[-1])
     proxima = normalize_whitespace(seguinte[0])
-    if not anterior or not proxima or _SECTION_RE.match(proxima):
+    if not anterior or not proxima:
+        return False
+    # Em PDFs paginados, a quebra pode ocorrer entre a palavra "figura" e o
+    # número seguido da continuação da frase. Esse "5." não é um novo item.
+    if (
+        re.search(r"\bfigura\s*$", anterior, re.IGNORECASE)
+        and re.match(r"^\d+\.\s+\S+", proxima)
+    ):
+        return True
+    if _SECTION_RE.match(proxima):
         return False
     proxima_e_tabela = _TABLE_RE.match(proxima) is not None
     if proxima_e_tabela:
@@ -908,7 +925,13 @@ def _juntar_linhas_do_bloco(linhas: list[str]) -> str:
         trecho = normalize_whitespace(linha)
         if not trecho:
             continue
-        if linhas_logicas and (
+        if (
+            linhas_logicas
+            and re.search(r"\bfigura\s*$", linhas_logicas[-1], re.IGNORECASE)
+            and re.match(r"^\d+\.\s+\S+", trecho)
+        ):
+            linhas_logicas[-1] = f"{linhas_logicas[-1]} {trecho}".strip()
+        elif linhas_logicas and (
             _is_image_marker(trecho)
             or _FIGURE_CAPTION_RE.match(trecho)
             or _SPECIAL_BLOCK_START_RE.match(trecho)
@@ -973,6 +996,11 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
         lista_verificacao = normalized_for_match(linha).rstrip(".:") == "LISTA DE VERIFICACAO"
         observacao_numerada = re.match(r"^OBSERVA(?:ÇÃO|CAO)\s+\d+\s*[:.]", linha, re.IGNORECASE) is not None
         item_de_lista_standalone = bool(anexo_standalone and _LIST_ITEM_RE.match(linha))
+        item_de_lista_apos_secao = bool(
+            atual
+            and _LIST_ITEM_RE.match(linha)
+            and _SECTION_RE.match(atual[0])
+        )
         titulo_raiz_standalone = bool(
             anexo_standalone and re.match(r"^\s*\d+\s*[-–—]\s*\S+", linha)
         )
@@ -981,6 +1009,7 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
             or titulo_tabela
             or item_de_tabela
             or item_de_lista_standalone
+            or item_de_lista_apos_secao
             or titulo_raiz_standalone
             or _OPERATIONAL_TABLE_ROW_RE.match(linha)
             or _OPERATIONAL_STAGE_RE.match(linha)
@@ -1133,7 +1162,12 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
             categoria = "aplicacao"
         elif categoria == "geral" and secao_principal_contextual.endswith("DEFINICOES"):
             categoria = "definicoes"
-        if escopo_contextual == "tabelas_tecnicas" and categoria not in {"titulo_tabela", "cabecalho_tabela"}:
+        if escopo_contextual == "tabelas_tecnicas" and categoria not in {
+            "titulo_tabela",
+            "cabecalho_tabela",
+            "imagem",
+            "legenda_figura",
+        }:
             categoria = "tabela_tecnica"
         if escopo_contextual == "tabela_2" and categoria == "secao_principal":
             categoria = "atividade_tabela_2"
@@ -1162,6 +1196,12 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
                 categoria = "lista_informativa"
             elif categoria == "cabecalho_tabela" and escopo_contextual != "tabela_2":
                 categoria = "tabela_tecnica"
+        if (
+            categoria in {"lista_informativa", "tabela_tecnica"}
+            and "RESPONSAVEIS PELA EXECUCAO" in titulo_contextual
+            and all(termo in normalized_for_match(bloco_texto) for termo in ("QUEM", "O QUE"))
+        ):
+            categoria = "fragmento_interface"
         item_padrao_fonte = extrair_item_padrao(bloco_texto)
         if anexo_standalone and not item_padrao_fonte and re.match(r"^\s*\d+\s*[-–—]\s*\S+", bloco_texto):
             item_padrao_fonte = f"{item_numerado_fonte}-"

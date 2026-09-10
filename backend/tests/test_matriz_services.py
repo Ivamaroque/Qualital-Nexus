@@ -566,6 +566,32 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(blocos[1]["contextoTarefa"], {"itemPadrao": "", "subtarefaHTA": "1."})
         self.assertEqual(blocos[4]["contextoTarefa"], {})
 
+    def test_reference_table_does_not_capture_following_hierarchical_section(self):
+        blocos = separar_blocos(
+            "Tabela 2 - Tanques do sistema de drenagem\n"
+            "3.3.2.2.5. A seleção é feita conforme indicado na figura\n"
+            "5. Existe ainda um monitor de discrepância.\n"
+            "Figura 5 - Controle de nível"
+        )
+
+        item = next(bloco for bloco in blocos if bloco["itemPadraoDetectado"] == "3.3.2.2.5.")
+
+        self.assertEqual(blocos[0]["escopo"], "tabelas_tecnicas")
+        self.assertEqual(item["escopo"], "documento_principal")
+        self.assertIn("figura 5. Existe ainda", item["texto"])
+        self.assertFalse(any(bloco["itemPadraoDetectado"] == "5." for bloco in blocos))
+
+    def test_image_after_reference_table_remains_an_image_block(self):
+        blocos = separar_blocos(
+            "Tabela 2 - Tanques do sistema de drenagem\n"
+            "[[IMAGEM_PDF:1]]\n"
+            "Figura 1 - Tanques de drenagem"
+        )
+
+        self.assertEqual(blocos[1]["categoria"], "imagem")
+        self.assertEqual(blocos[1]["imagemIndice"], 1)
+        self.assertEqual(blocos[2]["categoria"], "legenda_figura")
+
     def test_pdf_parser_extracts_hierarchical_item_for_section_titles(self):
         blocos = separar_blocos("3.2 - Atividade\nFluxo das atividades.\n3.2.1 - Responsável\nTécnico de operação.")
 
@@ -956,6 +982,75 @@ class MatrizServicesTest(unittest.TestCase):
         )
         self.assertEqual(linhas[0].descricao, "Quem - O que")
         self.assertIn("Informar qualquer anormalidade", linhas[-1].descricao)
+
+    def test_responsibility_table_is_ignored_without_losing_section_heading(self):
+        blocos = separar_blocos(
+            "3.2. Responsáveis pela execução da atividade\n"
+            "• Quem | O quê\n"
+            "• Operador de embarcação controle | Executar o procedimento\n"
+            "• Operador de embarcação campo"
+        )
+
+        self.assertEqual(blocos[0]["categoria"], "subsecao_numerada")
+        self.assertEqual(blocos[1]["categoria"], "fragmento_interface")
+        linhas = [
+            linha
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+        self.assertEqual(linhas[0].tipoTarefa, "Título/Subtítulo")
+        self.assertTrue(all(not linha.descricao for linha in linhas[1:]))
+
+    def test_passive_and_future_actions_keep_subjects_and_granularity(self):
+        blocos = separar_blocos(
+            "3.3.2.2.1. A equipe efetuará amostragens, coletando uma amostra para análise. "
+            "Caso o descarte ocorra em período prolongado será realizada uma nova análise a cada 2 horas. "
+            "O resultado da análise deverá ser registrado no Oil Record Book."
+        )
+
+        linhas = _criar_linhas_de_fallback(blocos[0])
+        tarefas = [linha.descricaoTarefa for linha in linhas if linha.tipoTarefa == "Execução"]
+
+        self.assertEqual(len(tarefas), 3)
+        self.assertTrue(tarefas[0].startswith("Efetuar amostragens"))
+        self.assertTrue(tarefas[1].startswith("Realizar uma nova análise"))
+        self.assertTrue(tarefas[2].startswith("Registrar o resultado da análise"))
+        self.assertTrue(all(not tarefa.startswith("Ser ") for tarefa in tarefas))
+
+    def test_mandatory_passive_actions_are_not_dropped_as_information(self):
+        blocos = separar_blocos(
+            "3.3.3.3. Havendo falha dos instrumentos toda equipe deve fazer rondas horárias. "
+            "Uma PT extraordinária deve ser lançada no APLAT."
+        )
+
+        self.assertEqual(blocos[0]["categoria"], "instrucao_operacional")
+        tarefas = [
+            linha.descricaoTarefa
+            for linha in _criar_linhas_de_fallback(blocos[0])
+            if linha.tipoTarefa == "Execução"
+        ]
+        self.assertEqual(len(tarefas), 2)
+        self.assertTrue(tarefas[0].startswith("Fazer rondas horárias"))
+        self.assertNotIn("toda equipe", tarefas[0].lower())
+        self.assertTrue(tarefas[1].startswith("Lançar uma PT extraordinária"))
+
+    def test_conditional_passive_does_not_turn_condition_into_subject(self):
+        blocos = separar_blocos(
+            "3.3.3.1. Havendo necessidade de parada, deverá ser dado o comando remoto. "
+            "Considerando o esquema da figura 3, deverá ser dado o comando para abertura da XV-B."
+        )
+
+        tarefas = [
+            linha.descricaoTarefa
+            for linha in _criar_linhas_de_fallback(blocos[0])
+            if linha.tipoTarefa == "Execução"
+        ]
+
+        self.assertEqual(len(tarefas), 2)
+        self.assertTrue(tarefas[0].startswith("Dar o comando remoto"))
+        self.assertIn("havendo necessidade de parada", tarefas[0].lower())
+        self.assertTrue(tarefas[1].startswith("Dar o comando para abertura"))
+        self.assertTrue(all("dar havendo" not in tarefa.lower() for tarefa in tarefas))
 
     def test_standalone_annex_keeps_conditional_actions_as_complete_rows(self):
         texto = limpar_texto_pdf(
