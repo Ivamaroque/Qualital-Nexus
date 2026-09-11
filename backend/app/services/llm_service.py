@@ -49,7 +49,7 @@ COVERAGE_RETRY_INSTRUCTION = (
 _TIPOS_TAREFA_POR_CATEGORIA = {
     "padrao_documento": "Padrão/Anexo",
     "secao_principal": "Título/Subtítulo",
-    "titulo_tabela": "Título/Subtítulo",
+    "titulo_tabela": "Informação",
     "lista_tarefas": "Título/Subtítulo",
     "lista_verificacao": "Título/Subtítulo",
     "legenda_figura": "Informação",
@@ -273,18 +273,25 @@ def _criar_linha_de_fallback(bloco: dict[str, Any]) -> MatrizLinha:
 
 
 _ACTION_VERB_RE = (
-    r"(?:aborte|abortar|abra|abrir|acione|acionar|acople|acoplar|aguarde|aguardar|ajuste|ajustar|"
-    r"alinhe|alinhar|anote|anotar|aperte|apertar|aplique|aplicar|"
-    r"atue|atuar|avalie|avaliar|baixe|baixar|bloqueie|bloquear|certifique|certificar|clique|clicar|colete|coletar|"
-    r"comunique|comunicar|continue|continuar|digite|digitar|escolha|escolher|feche|fechar|"
-    r"informe|informar|inspecione|inspecionar|instale|instalar|interrompa|interromper|isole|isolar|"
-    r"levante|levantar|ligue|ligar|observe|observar|posicione|posicionar|preencha|preencher|"
+    r"(?:aborte|abortar|abra|abrir|acesse|acessar|acione|acionar|acople|acoplar|aguarde|aguardar|ajuste|ajustar|"
+    r"alinhe|alinhar|amarre|amarrar|anote|anotar|aperte|apertar|aplique|aplicar|aproxime|aproximar|"
+    r"atente|atentar|atue|atuar|avalie|avaliar|avise|avisar|baixe|baixar|bloqueie|bloquear|"
+    r"certifique|certificar|clique|clicar|colete|coletar|coloque|colocar|comunique|comunicar|"
+    r"continue|continuar|digite|digitar|escolha|escolher|etiquete|etiquetar|feche|fechar|"
+    r"desconecte|desconectar|despressurize|despressurizar|dirija-se|dirigir-se|eleve|elevar|"
+    r"fique|ficar|garanta|garantir|informe|informar|inspecione|inspecionar|instale|instalar|interrompa|interromper|"
+    r"isole|isolar|lacrar|leia|ler|leve|levar|levante|levantar|ligue|ligar|mantenha|manter|normalize|normalizar|"
+    r"obtenha|obter|observe|observar|oriente|orientar|pague|pagar|parta|partir|pe[cç]a|pedir|"
+    r"posicione|posicionar|preencha|preencher|pressurize|pressurizar|puxe|puxar|"
     r"realize|realizar|recoloque|recolocar|"
-    r"retorne|retornar|retire|retirar|suba|subir|teste|testar|utilize|utilizar|varie|variar|"
-    r"confirmar|contatar|desligar|emitir|encaminhar|entrar\s+em\s+contato|estabelecer|executar|"
+    r"regule|regular|retorne|retornar|retire|retirar|selecione|selecionar|suba|subir|teste|testar|utilize|utilizar|varie|variar|visualize|visualizar|"
+    r"acompanha|acompanhar|abre|aciona|amarra|aproxima|avisa|certifica-se|coleta|coloca|confirma|confirmar|contatar|continua|desliga(?:ndo)?|desligar|"
+    r"emite|emitir|encaminhar|entrar\s+em\s+contato|estabelecer|etiqueta|executar|"
     r"fechar|informar|iniciar|inspecionar|instalar|liberar|manter|medir|monitorar|operar|parar|"
     r"preencher|proceder|registrar|remover|reparar|restabelecer|retirar|seguir|sinalizar|"
-    r"solicitar|tomar|transportar|travar|verificar|efetuar[aá]|fazer|lan[cç]ar|mobilizar)"
+    r"solicita|solicitar|toma|tomar|transportar|travar|troca-se|trocar|verifica|verificar|"
+    r"efetuar(?:[aá])?|entrega|faz|fazer|fecha|garante|informa|inicia|interrompe|lacra|lan[cç]ar|leva|libera|liga|mobilizar|monitora|"
+    r"normaliza|obt[eé]m|orienta|parte|pede|posiciona|recolhe|registra|regula|reinicia|realiza|seleciona)"
 )
 _MODAL_ACTION_RE = (
     r"(?:dever[aá]|dever[aã]o|devem-se|deve-se|devem|deve|recomenda-se|poder[aá])"
@@ -301,6 +308,8 @@ _PASSIVE_TO_INFINITIVE = {
     "colocad": "Colocar",
     "comunicad": "Comunicar",
     "dad": "Dar",
+    "desligad": "Desligar",
+    "emitid": "Emitir",
     "lançad": "Lançar",
     "lancad": "Lançar",
     "mantid": "Manter",
@@ -312,8 +321,51 @@ _PASSIVE_TO_INFINITIVE = {
     "tomad": "Tomar",
 }
 _FINITE_ACTION_TO_INFINITIVE = {
+    "acompanha": "Acompanhar",
+    "abre": "Abrir",
+    "aciona": "Acionar",
+    "amarra": "Amarrar",
+    "aproxima": "Aproximar",
+    "avisa": "Avisar",
+    "certifica-se": "Certificar-se",
+    "coleta": "Coletar",
+    "coloca": "Colocar",
+    "confirma": "Confirmar",
+    "continua": "Continuar",
+    "desliga": "Desligar",
+    "emite": "Emitir",
+    "entrega": "Entregar",
     "efetuará": "Efetuar",
     "efetuara": "Efetuar",
+    "etiqueta": "Etiquetar",
+    "faz": "Fazer",
+    "fecha": "Fechar",
+    "garante": "Garantir",
+    "informa": "Informar",
+    "inicia": "Iniciar",
+    "interrompe": "Interromper",
+    "lacra": "Lacrar",
+    "leva": "Levar",
+    "libera": "Liberar",
+    "liga": "Ligar",
+    "monitora": "Monitorar",
+    "normaliza": "Normalizar",
+    "obtém": "Obter",
+    "obtem": "Obter",
+    "orienta": "Orientar",
+    "parte": "Partir",
+    "pede": "Solicitar",
+    "posiciona": "Posicionar",
+    "recolhe": "Recolher",
+    "registra": "Registrar",
+    "regula": "Regular",
+    "reinicia": "Reiniciar",
+    "realiza": "Realizar",
+    "seleciona": "Selecionar",
+    "solicita": "Solicitar",
+    "toma": "Tomar",
+    "troca-se": "Trocar",
+    "verifica": "Verificar",
 }
 _GERUND_TO_INFINITIVE = {
     "acompanhando": "Acompanhar",
@@ -321,6 +373,7 @@ _GERUND_TO_INFINITIVE = {
     "atuando": "Atuar",
     "definindo": "Definir",
     "direcionando": "Direcionar",
+    "desligando": "Desligar",
     "informando": "Informar",
     "lendo": "Ler",
     "monitorando": "Monitorar",
@@ -335,11 +388,17 @@ _IMPERATIVE_TO_INFINITIVE = {
     "acione": "Acionar",
     "acople": "Acoplar",
     "aguarde": "Aguardar",
+    "ajuste": "Ajustar",
     "alinhe": "Alinhar",
+    "amarre": "Amarrar",
     "anote": "Anotar",
     "aperte": "Apertar",
     "baixe": "Baixar",
     "clique": "Clicar",
+    "colete": "Coletar",
+    "coloque": "Colocar",
+    "comunique": "Comunicar",
+    "confirme": "Confirmar",
     "continue": "Continuar",
     "digite": "Digitar",
     "escolha": "Escolher",
@@ -349,22 +408,38 @@ _IMPERATIVE_TO_INFINITIVE = {
     "instale": "Instalar",
     "interrompa": "Interromper",
     "isole": "Isolar",
+    "mantenha": "Manter",
     "levante": "Levantar",
     "ligue": "Ligar",
     "observe": "Observar",
+    "oriente": "Orientar",
+    "pague": "Pagar",
     "posicione": "Posicionar",
     "preencha": "Preencher",
+    "pressione": "Pressionar",
     "realize": "Realizar",
     "recoloque": "Recolocar",
     "retorne": "Retornar",
     "retire": "Retirar",
+    "regule": "Regular",
+    "selecione": "Selecionar",
     "suba": "Subir",
     "teste": "Testar",
     "trave": "Travar",
     "utilize": "Utilizar",
     "varie": "Variar",
     "verifique": "Verificar",
+    "visualize": "Visualizar",
 }
+_REQUIRED_RESOURCE_ACTION_RE = re.compile(
+    r"^Para\s+(?P<purpose>.+?),\s+s[aã]o\s+necess[aá]ri[oa]s?\s+(?P<resource>.+)$",
+    re.IGNORECASE,
+)
+_FUNDAMENTAL_ACTION_RE = re.compile(
+    r"^[ÉE]\s+fundamental\s+"
+    r"(?P<requirement>(?:uma\s+)?(?:perfeita\s+|adequada\s+)?comunica[cç][aã]o\b.+)$",
+    re.IGNORECASE,
+)
 _CONDITIONAL_PREFIX_RE = re.compile(
     r"^(?:ap[oó]s\b|antes\s+de\b|caso\b|com\s+base\b|depois\s+de\b|"
     r"considerando\b|durante\b|em\s+casos?\b|enquanto\b|havendo\b|"
@@ -421,6 +496,11 @@ def _normalizar_acao_para_infinitivo(texto: str) -> str:
     )
     if infinitivo:
         acao = infinitivo + acao[len(primeira_palavra):]
+    acao = re.sub(r"^Pedir\b", "Solicitar", acao, flags=re.IGNORECASE)
+    acao = re.sub(r"\bo\s+automatismo\b", "a automação", acao, flags=re.IGNORECASE)
+    acao = re.sub(r"\bautomatismo\b", "automação", acao, flags=re.IGNORECASE)
+    acao = re.sub(r"\bcaso\s+a\s+haja\b", "caso haja", acao, flags=re.IGNORECASE)
+    acao = re.sub(r"\bocorreu\s+à\s+normalização\b", "ocorreu a normalização", acao, flags=re.IGNORECASE)
     if acao:
         acao = acao[0].upper() + acao[1:]
     return acao.rstrip(" ;") + ("." if acao and acao[-1] not in ".!?" else "")
@@ -474,12 +554,19 @@ def _extrair_contexto_condicional(prefixo: str) -> str:
     contexto = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*", "", prefixo).strip(" ,;.")
     if not _CONDITIONAL_PREFIX_RE.match(contexto):
         return ""
+    condicao_curta = re.match(
+        r"^(Caso\s+(?:positivo|negativo))\b",
+        contexto,
+        re.IGNORECASE,
+    )
+    if condicao_curta:
+        return condicao_curta.group(1)
     partes = contexto.rsplit(",", maxsplit=1)
     sujeito_final = partes[1].strip() if len(partes) == 2 else ""
     if len(partes) == 2 and (
         re.fullmatch(
             r"(?:o|a|os|as|um|uma|uns|umas|todo|toda|todos|todas)\s+"
-            r"(?:[\wÀ-ÿ./-]+\s*){1,8}",
+            r"(?:[\wÀ-ÿ./-]+\s*){1,16}",
             sujeito_final,
             re.IGNORECASE,
         )
@@ -527,6 +614,9 @@ def _anexar_contexto_condicional(acao: str, contexto: str) -> str:
     contexto_normalizado = _normalizar_texto_para_fundamentacao(contexto)
     if contexto_normalizado and contexto_normalizado in _normalizar_texto_para_fundamentacao(acao):
         return acao
+    contexto = re.sub(r"\bo\s+automatismo\b", "a automação", contexto, flags=re.IGNORECASE)
+    contexto = re.sub(r"\bautomatismo\b", "automação", contexto, flags=re.IGNORECASE)
+    contexto = re.sub(r"\bcaso\s+a\s+haja\b", "caso haja", contexto, flags=re.IGNORECASE)
     contexto = contexto[0].lower() + contexto[1:] if contexto else contexto
     return f"{acao.rstrip('.;')}, {contexto}."
 
@@ -560,20 +650,100 @@ def _normalizar_acao_com_contexto(texto: str) -> str:
 
 
 def _separar_acoes_coordenadas(texto: str) -> list[str]:
-    partes = re.split(
-        rf",\s*(?={_ACTION_VERB_RE}\b)|\s+e\s+(?={_ACTION_VERB_RE}\b)",
+    texto = re.sub(
+        rf"\s+e\s+((?:caso|se|quando)\b[^,;]+),\s*(?={_ACTION_VERB_RE}\b)",
+        r"; \1, ",
         texto,
         flags=re.IGNORECASE,
     )
-    return [parte.strip() for parte in partes if parte.strip()]
+    partes = re.split(
+        rf";\s*(?=(?:caso|se|quando)\b)|"
+        rf",\s*para\s+(?={_ACTION_VERB_RE}\b)|"
+        rf",\s*(?={_ACTION_VERB_RE}\b)|"
+        rf"\s+e\s+(?={_ACTION_VERB_RE}\b)",
+        texto,
+        flags=re.IGNORECASE,
+    )
+    partes = [parte.strip() for parte in partes if parte.strip()]
+    reagrupadas: list[str] = []
+    indice = 0
+    while indice < len(partes):
+        parte = partes[indice]
+        if (
+            indice + 1 < len(partes)
+            and _CONDITIONAL_PREFIX_RE.match(parte)
+            and not re.search(rf"\b{_ACTION_VERB_RE}\b", parte, re.IGNORECASE)
+        ):
+            reagrupadas.append(f"{parte}, {partes[indice + 1]}")
+            indice += 2
+            continue
+        reagrupadas.append(parte)
+        indice += 1
+    partes = reagrupadas
+    for indice in range(1, len(partes)):
+        anterior = partes[indice - 1]
+        if not _CONDITIONAL_PREFIX_RE.match(anterior):
+            continue
+        inicio_acao = re.search(rf"\b{_ACTION_VERB_RE}\b", anterior, re.IGNORECASE)
+        if inicio_acao and not _CONDITIONAL_PREFIX_RE.match(partes[indice]):
+            condicao = anterior[:inicio_acao.start()].strip(" ,")
+            partes[indice] = f"{condicao}, {partes[indice]}"
+    for indice in range(len(partes) - 1):
+        if re.fullmatch(r"(?:lacra|etiqueta)", partes[indice], re.IGNORECASE):
+            complemento = re.sub(
+                rf"^{_ACTION_VERB_RE}\s+",
+                "",
+                partes[indice + 1],
+                count=1,
+                flags=re.IGNORECASE,
+            ).strip()
+            if complemento:
+                partes[indice] = f"{partes[indice]} {complemento}"
+        if re.match(r"^desligando-a\b", partes[indice + 1], re.IGNORECASE):
+            codigos = re.findall(r"\b[A-Z]{1,5}-\d+[A-Z]?\b", partes[indice], re.IGNORECASE)
+            if codigos:
+                partes[indice + 1] = re.sub(
+                    r"^desligando-a\b",
+                    f"desligando a {codigos[-1]}",
+                    partes[indice + 1],
+                    flags=re.IGNORECASE,
+                )
+    return partes
 
 
 def _extrair_acoes_explicitas(texto: str) -> list[str]:
     sentencas = re.split(r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚ])", " ".join(texto.split()))
     acoes: list[str] = []
     for sentenca in sentencas:
-        sentenca = re.sub(r"^\s*[-–—•·]\s*", "", sentenca)
+        sentenca = re.sub(r"^\s*(?:[-–—•·]|[a-z][)])\s*", "", sentenca, flags=re.IGNORECASE)
         if re.search(r"\bnão\s+dev(?:e|em|erá|erão)\b", sentenca, re.IGNORECASE):
+            continue
+        sentenca = re.sub(
+            r"\s+e\s+se\s+necess[aá]rio\s+.+?,\s*seguir\s+para\s+o\s+item\s+"
+            r"\d+(?:\.\d+)*(?:\s+(?:desse?|deste)\s+padr[aã]o)?\s+e\s+",
+            " e ",
+            sentenca,
+            flags=re.IGNORECASE,
+        )
+        recurso_necessario = _REQUIRED_RESOURCE_ACTION_RE.match(sentenca)
+        if recurso_necessario:
+            recurso = recurso_necessario.group("resource").strip(" ;,.")
+            finalidade = recurso_necessario.group("purpose").strip(" ;,.")
+            acoes.append(
+                _normalizar_acao_para_infinitivo(
+                    f"Utilizar {recurso} para {finalidade}"
+                )
+            )
+            continue
+        requisito_fundamental = _FUNDAMENTAL_ACTION_RE.match(sentenca)
+        if requisito_fundamental:
+            requisito = re.sub(
+                r"\bquando\s+efetuar\b",
+                "durante",
+                requisito_fundamental.group("requirement"),
+                flags=re.IGNORECASE,
+            )
+            acoes.append(_normalizar_acao_para_infinitivo(f"Manter {requisito}"))
             continue
         sentenca = re.sub(
             rf"\b(deve-se|dever[aá]|dever[aã]o)\s+para\s+"
@@ -618,7 +788,7 @@ def _extrair_acoes_explicitas(texto: str) -> list[str]:
                     parte,
                     _sujeito_antes_do_modal(fonte_anterior),
                 )
-            acao = _normalizar_acao_para_infinitivo(parte)
+            acao = _normalizar_acao_com_contexto(parte)
             if acao:
                 acao = _resolver_referencias_locais(acao, fonte_anterior)
                 acao = _anexar_contexto_condicional(acao, contexto)
@@ -629,7 +799,11 @@ def _extrair_acoes_explicitas(texto: str) -> list[str]:
         acoes = [
             acao
             for acao in acoes
-            if not re.match(r"^Seguir o que se estabelece\b", acao, re.IGNORECASE)
+            if not re.match(
+                r"^Seguir (?:o que se estabelece|para o item)\b",
+                acao,
+                re.IGNORECASE,
+            )
         ]
     return acoes
 
@@ -977,7 +1151,7 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
             MatrizLinha(
                 ordemBloco=bloco["ordem"],
                 descricao=linhas_fonte[0],
-                tipoTarefa="Título/Subtítulo",
+                tipoTarefa="Informação",
             )
         ]
     if categoria == "tabela_tecnica" and linhas_fonte:

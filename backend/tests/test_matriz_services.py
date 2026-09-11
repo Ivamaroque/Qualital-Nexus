@@ -9,6 +9,7 @@ from asyncio import run
 from pathlib import Path
 from unittest.mock import patch
 
+import fitz
 from docx import Document
 from starlette.datastructures import UploadFile
 
@@ -983,6 +984,96 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(linhas[0].descricao, "Quem - O que")
         self.assertIn("Informar qualquer anormalidade", linhas[-1].descricao)
 
+    def test_responsibility_table_keeps_multiple_executors_with_same_activity(self):
+        class TabelaFalsa:
+            @staticmethod
+            def extract():
+                return [
+                    ["Quem", "O que"],
+                    ["Operador de Embarcação Controle", "Executar o processo"],
+                    ["Operador de Embarcação Campo", None],
+                ]
+
+        texto = _serializar_tabela(TabelaFalsa())
+
+        self.assertIn(
+            "Operador de Embarcação Controle; Operador de Embarcação Campo | Executar o processo",
+            texto,
+        )
+        self.assertEqual(len(texto.splitlines()), 2)
+
+    def test_table_caption_is_information_in_fallback(self):
+        linhas = _criar_linhas_de_fallback(
+            {
+                "ordem": 1,
+                "texto": "Tabela 01: Matriz de Responsabilidade",
+                "categoria": "titulo_tabela",
+            }
+        )
+
+        self.assertEqual(linhas[0].tipoTarefa, "Informação")
+
+    def test_measurement_with_thousands_separator_is_not_hierarchical_item(self):
+        blocos = separar_blocos(
+            "3.4.2.1. Monitorar o nível dos tanques. Por isso, sempre que o estoque esteja abaixo de\n"
+            "3.000 m³, o responsável deve ser informado."
+        )
+
+        self.assertEqual(len(blocos), 1)
+        self.assertEqual(blocos[0]["itemPadraoDetectado"], "3.4.2.1.")
+        self.assertIn("3.000 m³", blocos[0]["texto"])
+
+    def test_lettered_steps_after_technical_table_return_to_document_scope(self):
+        blocos = separar_blocos(
+            "3.3.1.8. Partida das centrífugas\n"
+            "Tabela 04: Tempos selecionados na IHM\n"
+            "• Descrição | Tempo correto\n"
+            "• Partida | 80 s\n"
+            "e) Confirmar com Enter qualquer mudança de parâmetro;\n"
+            "f) Verificar o modo das bombas."
+        )
+        passos = [bloco for bloco in blocos if bloco["itemPadraoDetectado"] in {"3.3.1.8.e.", "3.3.1.8.f."}]
+
+        self.assertEqual(len(passos), 2)
+        self.assertTrue(all(bloco["escopo"] == "documento_principal" for bloco in passos))
+        self.assertTrue(all(bloco["categoria"] == "instrucao_operacional" for bloco in passos))
+
+    def test_image_only_pdf_page_is_preserved_as_rendered_image(self):
+        documento = fitz.open()
+        pagina = documento.new_page(width=420, height=300)
+        pagina.draw_rect(fitz.Rect(20, 20, 400, 280), color=(0, 0, 0))
+        conteudo = documento.tobytes()
+        documento.close()
+
+        texto, imagens = extrair_texto_e_imagens_pdf(conteudo)
+        blocos = separar_blocos(texto, "PE-TESTE - Anexo A - Check List.pdf")
+
+        self.assertEqual(texto, "[[IMAGEM_PDF:1]]")
+        self.assertEqual(len(imagens), 1)
+        self.assertEqual(imagens[0]["formato"], "png")
+        self.assertGreater(imagens[0]["largura"], 420)
+        self.assertEqual([bloco["categoria"] for bloco in blocos], ["anexo_documento", "imagem"])
+
+    def test_operational_imperatives_and_passives_are_not_downgraded_to_information(self):
+        blocos = separar_blocos(
+            "3.3.1.1. Operação\n"
+            "a) Com o cabo no rebocador, pedir via rádio a devolução;\n"
+            "b) Ao término da manobra, a unidade deve ser desligada;\n"
+            "c) Após avaliação, deve ser emitida uma nota de manutenção.\n"
+            "3.4.1.5. Mantenha observações quanto ao nível do tanque."
+        )
+
+        passos = [
+            bloco
+            for bloco in blocos
+            if bloco["itemPadraoDetectado"] in {"3.3.1.1.a.", "3.3.1.1.b.", "3.3.1.1.c.", "3.4.1.5."}
+        ]
+        self.assertEqual([bloco["categoria"] for bloco in passos], ["instrucao_operacional"] * 4)
+        linhas = [linha for bloco in passos for linha in _criar_linhas_de_fallback(bloco)]
+        self.assertTrue(all(linha.tipoTarefa == "Execução" for linha in linhas))
+        self.assertIn("Desligar a unidade", " ".join(linha.descricaoTarefa for linha in linhas))
+        self.assertIn("Emitir uma nota", " ".join(linha.descricaoTarefa for linha in linhas))
+
     def test_responsibility_table_is_ignored_without_losing_section_heading(self):
         blocos = separar_blocos(
             "3.2. Responsáveis pela execução da atividade\n"
@@ -1051,6 +1142,86 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertIn("havendo necessidade de parada", tarefas[0].lower())
         self.assertTrue(tarefas[1].startswith("Dar o comando para abertura"))
         self.assertTrue(all("dar havendo" not in tarefa.lower() for tarefa in tarefas))
+
+    def test_lettered_document_items_are_split_and_keep_section_numbering(self):
+        blocos = separar_blocos(
+            "3.3.1. Operação e Monitoramento\n"
+            "a) O Operador monitora o nível e informa ao controle;\n"
+            "b) A bomba entra em operação automaticamente;\n"
+            "OBS: A bomba é selecionada no painel."
+        )
+
+        self.assertEqual(blocos[0]["categoria"], "subsecao_numerada")
+        self.assertEqual(blocos[1]["itemPadraoDetectado"], "3.3.1.a.")
+        self.assertEqual(blocos[2]["itemPadraoDetectado"], "3.3.1.b.")
+        self.assertEqual(blocos[1]["categoria"], "instrucao_operacional")
+        self.assertEqual(blocos[2]["categoria"], "geral")
+        self.assertEqual(blocos[3]["categoria"], "geral")
+
+    def test_present_tense_and_coordinated_actions_are_extracted_separately(self):
+        blocos = separar_blocos(
+            "3.3.2. Abastecimento\n"
+            "e) O Operador deve remover o lacre, posicionar o tubo e colocar a bomba em operação;\n"
+            "i) O Operador lacra e etiqueta o tambor após a transferência e avisa a equipe."
+        )
+        execucoes = {
+            bloco["itemPadraoDetectado"]: [
+                linha.descricaoTarefa
+                for linha in _criar_linhas_de_fallback(bloco)
+                if linha.tipoTarefa == "Execução"
+            ]
+            for bloco in blocos
+            if bloco["categoria"] == "instrucao_operacional"
+        }
+
+        self.assertEqual(len(execucoes["3.3.2.e."]), 3)
+        self.assertTrue(execucoes["3.3.2.e."][0].startswith("Remover o lacre"))
+        self.assertTrue(execucoes["3.3.2.e."][1].startswith("Posicionar o tubo"))
+        self.assertTrue(execucoes["3.3.2.e."][2].startswith("Colocar a bomba"))
+        self.assertEqual(len(execucoes["3.3.2.i."]), 3)
+        self.assertTrue(execucoes["3.3.2.i."][0].startswith("Lacrar o tambor"))
+        self.assertTrue(execucoes["3.3.2.i."][1].startswith("Etiquetar o tambor"))
+        self.assertTrue(execucoes["3.3.2.i."][2].startswith("Avisar a equipe"))
+
+    def test_conditions_are_applied_to_each_dependent_action(self):
+        blocos = separar_blocos(
+            "3.3.1. Operação\n"
+            "f) O Operador verifica a pressão e caso esteja alta, "
+            "alinhar o filtro reserva e realizar a limpeza."
+        )
+        tarefas = [
+            linha.descricaoTarefa
+            for linha in _criar_linhas_de_fallback(blocos[1])
+            if linha.tipoTarefa == "Execução"
+        ]
+
+        self.assertEqual(len(tarefas), 3)
+        self.assertTrue(tarefas[0].startswith("Verificar a pressão"))
+        self.assertIn("caso esteja alta", tarefas[1].lower())
+        self.assertIn("caso esteja alta", tarefas[2].lower())
+        self.assertTrue(all(not tarefa.lower().startswith("caso ") for tarefa in tarefas))
+
+    def test_operational_requirements_and_terminology_are_normalized(self):
+        blocos = separar_blocos(
+            "3.3.2. Abastecimento\n"
+            "e) Caso o automatismo não atue, o Operador deve pedir uma verificação;\n"
+            "f) O Operador precisa desligar a bomba quando o nível atingir 60%;\n"
+            "g) É fundamental uma perfeita comunicação entre os operadores durante a operação;\n"
+            "j) Para abastecer a unidade, são necessários 02 Operadores;\n"
+            "q) Essa operação deve ser executada com muita atenção."
+        )
+        linhas_por_item = {
+            bloco["itemPadraoDetectado"]: _criar_linhas_de_fallback(bloco)
+            for bloco in blocos[1:]
+        }
+
+        tarefa_e = linhas_por_item["3.3.2.e."][0].descricaoTarefa
+        self.assertIn("automação", tarefa_e)
+        self.assertNotIn("automatismo", tarefa_e)
+        self.assertTrue(linhas_por_item["3.3.2.f."][0].descricaoTarefa.startswith("Desligar a bomba"))
+        self.assertTrue(linhas_por_item["3.3.2.g."][0].descricaoTarefa.startswith("Manter uma perfeita comunicação"))
+        self.assertTrue(linhas_por_item["3.3.2.j."][0].descricaoTarefa.startswith("Utilizar 02 Operadores"))
+        self.assertEqual(linhas_por_item["3.3.2.q."][0].tipoTarefa, "Informação")
 
     def test_standalone_annex_keeps_conditional_actions_as_complete_rows(self):
         texto = limpar_texto_pdf(
