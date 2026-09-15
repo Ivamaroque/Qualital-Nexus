@@ -134,6 +134,10 @@ def gerar_xlsx_matriz(linhas: list[dict[str, Any]]) -> bytes:
                     "conteudo": conteudo,
                     "largura": largura,
                     "altura": altura,
+                    "descricao": (
+                        _campo_planilha(linha.get("descricao"))[:1000]
+                        or "Imagem extraída do documento de origem"
+                    ),
                 }
             )
 
@@ -174,7 +178,7 @@ def gerar_xlsx_matriz(linhas: list[dict[str, Any]]) -> bytes:
             cy = imagem["altura"] * 9525
             ancoras.append(f'''<xdr:oneCellAnchor>
 <xdr:from><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{linha_zero}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
-<xdr:ext cx="{cx}" cy="{cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="{indice}" name="Figura {indice}" descr="Imagem extraída do documento de origem"/><xdr:cNvPicPr/></xdr:nvPicPr>
+<xdr:ext cx="{cx}" cy="{cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="{indice}" name="Figura {indice}" descr="{escape(imagem["descricao"], {'"': '&quot;', "'": '&apos;'})}"/><xdr:cNvPicPr/></xdr:nvPicPr>
 <xdr:blipFill><a:blip r:embed="rId{indice}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>
 <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/>
 </xdr:oneCellAnchor>''')

@@ -14,6 +14,8 @@ _MEASUREMENT_AFTER_NUMBER_RE = (
     r"kpa|mpa|bar|[º°]c)"
 )
 _IMAGE_ONLY_PAGE_SCALE = 2
+_TABLE_IMAGE_SCALE = 2
+_TABLE_IMAGE_PADDING = 3
 _SECTION_RE = re.compile(
     rf"^(?:\d+\.|\d+\.\d+(?:\.\d+){{0,6}}\.?)(?!\s*{_MEASUREMENT_AFTER_NUMBER_RE}(?=\s|[,.;:]|$))"
     r"\s+(?:[-–—]\s*)?.+",
@@ -29,6 +31,8 @@ _OPERATIONAL_TABLE_SCOPE_RE = re.compile(
     r"\b(?:ETAPAS?|ATIVIDADES?|EXECU[CÇ][AÃ]O|O\s+QUE\s+FAZER)\b",
     re.IGNORECASE,
 )
+_DEVIATION_TABLE_RESULT_RE = re.compile(r"\bRESULTADOS?\s+ESPERADOS?\b")
+_DEVIATION_TABLE_ACTIONS = "ACOES PARA DESVIOS"
 _LIST_ITEM_RE = re.compile(
     r"^(?:[•·▪◦*-]|[a-z][)]|\d+[.)-]|\d+\s*[-–—])\s+\S+",
     re.IGNORECASE,
@@ -85,7 +89,8 @@ _MIN_IMAGE_AREA = 15_000
 _REPEATED_IMAGE_THRESHOLD = 3
 _FIGURE_CAPTION_RE = re.compile(r"^[•\-]?\s*FIGURA\s+\d+\s*[-–—:]", re.IGNORECASE)
 _SPECIAL_BLOCK_START_RE = re.compile(
-    r"^(?:LISTA\s+DE\s+VERIFICAÇÃO|OBSERVAÇÕES?\s+(?:PRELIMINARES|\d+)|COMO\s+FAZER|O\s+QUE\s+FAZER)\s*[:.]?",
+    r"^(?:LISTA\s+DE\s+VERIFICAÇÃO|OBSERVAÇÕES?\s+(?:PRELIMINARES|\d+)|COMO\s+FAZER|O\s+QUE\s+FAZER"
+    r"|RESULTADO\s+ESPERADO|AÇÕES\s+PARA\s+DESVIOS)\s*[:.]?",
     re.IGNORECASE,
 )
 _NUMBERED_ITEM_RE = re.compile(
@@ -212,29 +217,18 @@ def _normalizar_celula_tabela(valor: object) -> str:
     return _juntar_linhas_do_bloco(str(valor).splitlines())
 
 
-def _serializar_tabela(tabela: object) -> str:
-    linhas = [list(linha) for linha in tabela.extract()]
-    cabecalho_responsabilidade = bool(linhas) and all(
-        termo in normalized_for_match(" ".join(str(celula or "") for celula in linhas[0]))
-        for termo in ("QUEM", "O QUE")
+def _linhas_formam_tabela_operacional(linhas: list[list[object]]) -> bool:
+    if not linhas:
+        return False
+    cabecalho_normalizado = normalized_for_match(
+        " ".join(str(celula or "") for celula in linhas[0])
     )
-    if cabecalho_responsabilidade:
-        linhas_agrupadas: list[list[object]] = [linhas[0]]
-        for linha in linhas[1:]:
-            apenas_executante = bool(linha and linha[0]) and not any(linha[1:])
-            anterior_tem_execucao = (
-                len(linhas_agrupadas) > 1
-                and len(linhas_agrupadas[-1]) >= 2
-                and bool(linhas_agrupadas[-1][1])
-            )
-            if apenas_executante and anterior_tem_execucao:
-                linhas_agrupadas[-1][0] = (
-                    f"{linhas_agrupadas[-1][0]}; {linha[0]}"
-                )
-                continue
-            linhas_agrupadas.append(linha)
-        linhas = linhas_agrupadas
-    operacional = any(
+    if (
+        _DEVIATION_TABLE_RESULT_RE.search(cabecalho_normalizado)
+        and _DEVIATION_TABLE_ACTIONS in cabecalho_normalizado
+    ):
+        return True
+    return any(
         any(
             marcador in normalized_for_match(celula or "")
             for celula in linha
@@ -256,6 +250,85 @@ def _serializar_tabela(tabela: object) -> str:
         )
         for linha in linhas
     )
+
+
+def _tabela_deve_ser_imagem(tabela: object) -> bool:
+    try:
+        linhas = [list(linha) for linha in tabela.extract()]
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return False
+    return bool(linhas) and not _linhas_formam_tabela_operacional(linhas)
+
+
+def _recortar_tabela_como_png(page: fitz.Page, tabela: object) -> tuple[bytes, int, int] | None:
+    try:
+        area = fitz.Rect(tabela.bbox)
+        area.x0 = max(page.rect.x0, area.x0 - _TABLE_IMAGE_PADDING)
+        area.y0 = max(page.rect.y0, area.y0 - _TABLE_IMAGE_PADDING)
+        area.x1 = min(page.rect.x1, area.x1 + _TABLE_IMAGE_PADDING)
+        area.y1 = min(page.rect.y1, area.y1 + _TABLE_IMAGE_PADDING)
+        if area.width <= 0 or area.height <= 0:
+            return None
+        pixmap = page.get_pixmap(
+            matrix=fitz.Matrix(_TABLE_IMAGE_SCALE, _TABLE_IMAGE_SCALE),
+            clip=area,
+            alpha=False,
+        )
+        return pixmap.tobytes("png"), pixmap.width, pixmap.height
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _serializar_tabela(tabela: object) -> str:
+    linhas = [list(linha) for linha in tabela.extract()]
+    cabecalho_normalizado = (
+        normalized_for_match(" ".join(str(celula or "") for celula in linhas[0]))
+        if linhas
+        else ""
+    )
+    tabela_de_desvios = bool(
+        _DEVIATION_TABLE_RESULT_RE.search(cabecalho_normalizado)
+        and _DEVIATION_TABLE_ACTIONS in cabecalho_normalizado
+    )
+    if tabela_de_desvios:
+        serializadas: list[str] = []
+        for indice_linha, linha in enumerate(linhas):
+            celulas = [_normalizar_celula_tabela(celula) for celula in linha]
+            if not any(celulas):
+                continue
+            if indice_linha == 0:
+                serializadas.append("RESULTADO ESPERADO | AÇÕES PARA DESVIOS")
+                continue
+            resultado_esperado = celulas[0] if celulas else ""
+            acao_desvio = celulas[1] if len(celulas) > 1 else ""
+            if resultado_esperado or acao_desvio:
+                serializadas.append(
+                    f"RESULTADO ESPERADO | {resultado_esperado}\n"
+                    f"AÇÕES PARA DESVIOS | {acao_desvio}"
+                )
+        return "\n\n".join(serializadas)
+
+    cabecalho_responsabilidade = bool(linhas) and all(
+        termo in normalized_for_match(" ".join(str(celula or "") for celula in linhas[0]))
+        for termo in ("QUEM", "O QUE")
+    )
+    if cabecalho_responsabilidade:
+        linhas_agrupadas: list[list[object]] = [linhas[0]]
+        for linha in linhas[1:]:
+            apenas_executante = bool(linha and linha[0]) and not any(linha[1:])
+            anterior_tem_execucao = (
+                len(linhas_agrupadas) > 1
+                and len(linhas_agrupadas[-1]) >= 2
+                and bool(linhas_agrupadas[-1][1])
+            )
+            if apenas_executante and anterior_tem_execucao:
+                linhas_agrupadas[-1][0] = (
+                    f"{linhas_agrupadas[-1][0]}; {linha[0]}"
+                )
+                continue
+            linhas_agrupadas.append(linha)
+        linhas = linhas_agrupadas
+    operacional = _linhas_formam_tabela_operacional(linhas)
 
     serializadas: list[str] = []
     descricao_antecipada = ""
@@ -308,6 +381,7 @@ def _extrair_pagina_com_tabelas(
     page: fitz.Page,
     tabelas: list[object],
     imagens: list[tuple[float, str]] | None = None,
+    tabelas_serializadas: list[object] | None = None,
 ) -> str:
     eventos: list[tuple[float, str]] = []
     bboxes_tabelas = [tabela.bbox for tabela in tabelas]
@@ -333,7 +407,8 @@ def _extrair_pagina_com_tabelas(
         if linhas_fora:
             eventos.append((posicao_y or 0, "\n".join(linhas_fora)))
 
-    eventos.extend((tabela.bbox[1], _serializar_tabela(tabela)) for tabela in tabelas)
+    tabelas_para_texto = tabelas if tabelas_serializadas is None else tabelas_serializadas
+    eventos.extend((tabela.bbox[1], _serializar_tabela(tabela)) for tabela in tabelas_para_texto)
     eventos.extend(imagens or [])
     return "\n\n".join(texto for _, texto in sorted(eventos, key=lambda evento: evento[0]) if texto.strip())
 
@@ -433,7 +508,38 @@ def extrair_texto_e_imagens_pdf(pdf_bytes: bytes) -> tuple[str, list[dict]]:
                     and not any(_bboxes_se_sobrepoem(tabela.bbox, bbox) for bbox in bboxes_imagem)
                 ]
                 if tabelas_relevantes:
-                    paginas.append(_extrair_pagina_com_tabelas(page, tabelas_relevantes, eventos_imagem))
+                    tabelas_serializadas: list[object] = []
+                    for tabela in tabelas_relevantes:
+                        if not _tabela_deve_ser_imagem(tabela):
+                            tabelas_serializadas.append(tabela)
+                            continue
+                        recorte = _recortar_tabela_como_png(page, tabela)
+                        if recorte is None:
+                            tabelas_serializadas.append(tabela)
+                            continue
+                        conteudo, largura, altura = recorte
+                        texto_alternativo = _serializar_tabela(tabela)
+                        indice = len(imagens_extraidas) + 1
+                        imagens_extraidas.append(
+                            {
+                                "indice": indice,
+                                "pagina": numero_pagina,
+                                "formato": "png",
+                                "largura": largura,
+                                "altura": altura,
+                                "conteudoBase64": base64.b64encode(conteudo).decode("ascii"),
+                                "textoAlternativo": texto_alternativo,
+                            }
+                        )
+                        eventos_imagem.append((tabela.bbox[1], f"[[IMAGEM_PDF:{indice}]]"))
+                    paginas.append(
+                        _extrair_pagina_com_tabelas(
+                            page,
+                            tabelas_relevantes,
+                            eventos_imagem,
+                            tabelas_serializadas,
+                        )
+                    )
                     continue
                 eventos = [
                     (float(bloco[1]), bloco[4].strip())
@@ -546,6 +652,11 @@ def detectar_categoria(texto: str) -> str:
 def detectar_escopo(texto: str) -> str:
     primeira_linha = texto.splitlines()[0] if texto else ""
     normalizado = normalized_for_match(primeira_linha)
+    if (
+        _DEVIATION_TABLE_RESULT_RE.search(normalizado)
+        and _DEVIATION_TABLE_ACTIONS in normalizado
+    ):
+        return "tabela_desvios"
     anexo = _ANEXO_DOCUMENTO_RE.match(primeira_linha.strip())
     if anexo:
         return f"anexo_{anexo.group(1).lower()}"
@@ -1192,6 +1303,16 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
         if titulo_anexo_arquivo:
             cabecalho_anexo.append(titulo_anexo_arquivo)
         blocos.insert(0, cabecalho_anexo)
+    numero_tabela_desvios = ""
+    for bloco in blocos:
+        texto_bloco = _juntar_linhas_do_bloco(bloco)
+        tabela_encontrada = re.match(
+            r"^TABELA\s*(\d+)\b",
+            normalized_for_match(texto_bloco),
+        )
+        if tabela_encontrada and detectar_escopo(texto_bloco) == "tabela_desvios":
+            numero_tabela_desvios = tabela_encontrada.group(1)
+            break
     segmentos_de_anexo: list[int] = []
     segmento_atual = 0
     for bloco in blocos:
@@ -1233,12 +1354,16 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
     tarefa_lista_contextual = ""
     em_lista_verificacao = False
     anexos_documento_vistos: set[str] = set()
-    escopos_explicitos = {"anexo", "tabela_2", "tabela_5", "tabelas_tecnicas"}
+    escopos_explicitos = {"anexo", "tabela_2", "tabela_5", "tabela_desvios", "tabelas_tecnicas"}
     for ordem, linhas in enumerate(blocos, start=1):
         bloco_texto = _juntar_linhas_do_bloco(linhas)
         if not bloco_texto:
             continue
         escopo_detectado = detectar_escopo(bloco_texto)
+        if escopo_detectado == "tabela_desvios":
+            tabela_encontrada = re.match(r"^TABELA\s*(\d+)\b", normalized_for_match(bloco_texto))
+            if tabela_encontrada:
+                numero_tabela_desvios = tabela_encontrada.group(1)
         if fluxograma_standalone:
             escopo_contextual = f"anexo_fluxograma_{identificador_anexo_arquivo.lower()}"
         elif anexo_standalone:
@@ -1302,6 +1427,12 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
             "legenda_figura",
         }:
             categoria = "tabela_tecnica"
+        if escopo_contextual == "tabela_desvios":
+            normalizado_bloco = normalized_for_match(bloco_texto)
+            if normalizado_bloco == "RESULTADO ESPERADO | ACOES PARA DESVIOS":
+                categoria = "cabecalho_tabela_desvios"
+            elif normalizado_bloco.startswith("RESULTADO ESPERADO |"):
+                categoria = "linha_tabela_desvios"
         if escopo_contextual == "tabela_2" and categoria == "secao_principal":
             categoria = "atividade_tabela_2"
         if escopo_contextual == "tabela_5" and categoria == "secao_principal":
@@ -1339,6 +1470,9 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
         if anexo_standalone and not item_padrao_fonte and re.match(r"^\s*\d+\s*[-–—]\s*\S+", bloco_texto):
             item_padrao_fonte = f"{item_numerado_fonte}-"
         item_padrao_detectado = _formatar_item_do_anexo(item_padrao_fonte, escopo_contextual)
+        if categoria == "linha_tabela_desvios":
+            partes_item = [secao_contextual.rstrip("."), f"Tabela {numero_tabela_desvios}".strip()]
+            item_padrao_detectado = ".".join(parte for parte in partes_item if parte).rstrip(".") + "."
         item_letra_documento = (
             _LETTERED_LIST_ITEM_RE.match(bloco_texto)
             if not anexo_standalone

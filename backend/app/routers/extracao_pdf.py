@@ -185,6 +185,7 @@ async def _processar_arquivos(
                         "imagemFormato": imagem["formato"],
                         "imagemLargura": imagem["largura"],
                         "imagemAltura": imagem["altura"],
+                        "imagemTextoAlternativo": imagem.get("textoAlternativo", ""),
                     })
             if not blocos:
                 raise ValueError("Nenhum bloco técnico foi identificado.")
@@ -229,7 +230,7 @@ async def _processar_arquivos(
         linhas_arquivo: list[dict[str, Any]] = [
             {
                 "ordemBloco": bloco["ordem"],
-                "descricao": "",
+                "descricao": bloco.get("imagemTextoAlternativo", ""),
                 "tipoTarefa": "Informação",
                 "imagemBase64": bloco["imagemBase64"],
                 "imagemFormato": bloco["imagemFormato"],

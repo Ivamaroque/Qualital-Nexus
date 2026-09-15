@@ -56,6 +56,8 @@ _TIPOS_TAREFA_POR_CATEGORIA = {
     "objetivo": "Informação",
     "atividade_tabela_2": "Título/Subtítulo",
     "atividade_anomalia": "Informação",
+    "cabecalho_tabela_desvios": "Informação",
+    "linha_tabela_desvios": "Execução",
     "como_fazer": "Execução",
     "porque_fazer": "Informação",
     "fragmento_interface": "Ignorar",
@@ -976,6 +978,55 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
     """Preserva a estrutura mínima do PDF quando a IA não cobre um bloco."""
     categoria = bloco.get("categoria")
     linhas_fonte = [linha.strip() for linha in str(bloco.get("texto") or "").splitlines() if linha.strip()]
+    if categoria == "cabecalho_tabela_desvios":
+        return [
+            MatrizLinha(
+                ordemBloco=bloco["ordem"],
+                descricao="Resultado Esperado.",
+                tipoTarefa="Informação",
+            ),
+            MatrizLinha(
+                ordemBloco=bloco["ordem"],
+                descricao="Ações para Desvios.",
+                tipoTarefa="Informação",
+            ),
+        ]
+    if categoria == "linha_tabela_desvios":
+        campos: dict[str, str] = {}
+        for linha_fonte in linhas_fonte:
+            chave, separador, valor = linha_fonte.partition("|")
+            if separador:
+                campos[normalized_for_match(chave).strip()] = valor.strip()
+        resultado_esperado = campos.get("RESULTADO ESPERADO", "")
+        acao_desvio = campos.get("ACOES PARA DESVIOS", "")
+        item_padrao = str(bloco.get("itemPadraoDetectado") or "")
+        linhas: list[MatrizLinha] = []
+        if resultado_esperado:
+            linhas.append(
+                MatrizLinha(
+                    ordemBloco=bloco["ordem"],
+                    itemPadrao=item_padrao,
+                    descricao=resultado_esperado,
+                    tipoTarefa="Título/Subtítulo",
+                )
+            )
+        if acao_desvio:
+            linhas.append(
+                MatrizLinha(
+                    ordemBloco=bloco["ordem"],
+                    itemPadrao=item_padrao,
+                    descricao=acao_desvio,
+                    tipoTarefa="Execução",
+                    descricaoTarefa=_normalizar_acao_para_infinitivo(acao_desvio),
+                )
+            )
+        return linhas or [
+            MatrizLinha(
+                ordemBloco=bloco["ordem"],
+                descricao=" ".join(linhas_fonte),
+                tipoTarefa="Informação",
+            )
+        ]
     if linhas_fonte and normalized_for_match(" ".join(linhas_fonte)).rstrip(":") in {
         "COMO FAZER",
         "PORQUE FAZER",
@@ -1369,6 +1420,8 @@ def _bloco_tem_contrato_deterministico(bloco: dict[str, Any]) -> bool:
         in {
             "padrao_documento",
             "titulo_tabela",
+            "cabecalho_tabela_desvios",
+            "linha_tabela_desvios",
             "atividade_tabela_2",
             "cabecalho_tabela",
             "objetivo",

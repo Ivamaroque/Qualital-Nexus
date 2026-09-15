@@ -498,6 +498,30 @@ def consolidar_hierarquia_tarefas(
 
         chave_contador = (raiz, subsecao)
         contador_acao[chave_contador] += 1
+        if bloco.get("categoria") == "linha_tabela_desvios":
+            numero_resultado = contador_acao[chave_contador]
+            prefixo_resultado = f"{prefixo}{numero_resultado}."
+            titulo_resultado = next(
+                (
+                    candidata
+                    for candidata in resultado
+                    if candidata.get("ordemBloco") == ordem
+                    and candidata.get("tipoTarefa") == "Título/Subtítulo"
+                ),
+                None,
+            )
+            if titulo_resultado:
+                titulo_resultado["subtarefaHTA"] = prefixo_resultado
+                titulo_resultado["descricaoTarefa"] = _descricao_tarefa_com_item(
+                    str(titulo_resultado.get("descricao") or ""),
+                    str(titulo_resultado.get("itemPadrao") or ""),
+                )
+            linha["subtarefaHTA"] = f"{prefixo_resultado}1."
+            linha["descricaoTarefa"] = _descricao_tarefa_com_item(
+                str(linha.get("descricaoTarefa") or ""),
+                item_exibicao,
+            )
+            continue
         linha["subtarefaHTA"] = f"{prefixo}{contador_acao[chave_contador]}."
         linha["descricaoTarefa"] = _descricao_tarefa_com_item(
             str(linha.get("descricaoTarefa") or ""),

@@ -1013,6 +1013,48 @@ class MatrizServicesTest(unittest.TestCase):
 
         self.assertEqual(linhas[0].tipoTarefa, "Informação")
 
+    def test_expected_result_and_deviation_action_table_preserves_pairs(self):
+        class TabelaFalsa:
+            @staticmethod
+            def extract():
+                return [
+                    ["Resultado Esperado", "Ações para Desvios"],
+                    [
+                        "100% dos poços testados, atendendo aos requisitos legais e metrológicos do regulamento técnico da ANP.",
+                        "Não sendo possível testar um poço conforme a programação, comunicar o fato à COP e reprogramar o teste.",
+                    ],
+                    [
+                        "Injeção de bissulfito de sódio e hidróxido de sódio na linha da UTA das caldeiras dentro da dosagem correta e sem vazamentos.",
+                        "Caso os reservatórios estejam baixos ou haja vazamentos, acionar o técnico químico.",
+                    ],
+                ]
+
+        texto_tabela = _serializar_tabela(TabelaFalsa())
+        blocos = separar_blocos(
+            "3.5. Ações preventivas e corretivas em casos de anomalias\n\n"
+            f"{texto_tabela}\n\n"
+            "Tabela 3 - Resultados esperados x ações para desvios."
+        )
+        with patch("app.services.llm_service._converter_prompt") as conversor:
+            linhas = converter_blocos_com_ia(blocos, [], [], {"filename": "teste.pdf"})
+        conversor.assert_not_called()
+        consolidadas = consolidar_hierarquia_tarefas(blocos, linhas)
+
+        linhas_tabela = [
+            linha
+            for linha in consolidadas
+            if linha.get("itemPadrao") == "3.5.Tabela 3."
+        ]
+        self.assertEqual(
+            [linha["tipoTarefa"] for linha in linhas_tabela],
+            ["Título/Subtítulo", "Execução", "Título/Subtítulo", "Execução"],
+        )
+        self.assertEqual(
+            [linha["subtarefaHTA"] for linha in linhas_tabela],
+            ["1.1.", "1.1.1.", "1.2.", "1.2.1."],
+        )
+        self.assertIn("comunicar o fato à COP", linhas_tabela[1]["descricaoTarefa"])
+
     def test_measurement_with_thousands_separator_is_not_hierarchical_item(self):
         blocos = separar_blocos(
             "3.4.2.1. Monitorar o nível dos tanques. Por isso, sempre que o estoque esteja abaixo de\n"
@@ -1053,6 +1095,45 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(imagens[0]["formato"], "png")
         self.assertGreater(imagens[0]["largura"], 420)
         self.assertEqual([bloco["categoria"] for bloco in blocos], ["anexo_documento", "imagem"])
+
+    def test_technical_pdf_table_is_preserved_as_embedded_image(self):
+        documento = fitz.open()
+        pagina = documento.new_page(width=420, height=300)
+        pagina.insert_text((20, 30), "4. REGISTROS")
+        colunas = [20, 150, 230, 310, 400]
+        linhas = [50, 80, 120, 160]
+        for coluna in colunas:
+            pagina.draw_line((coluna, linhas[0]), (coluna, linhas[-1]), color=(0, 0, 0))
+        for linha in linhas:
+            pagina.draw_line((colunas[0], linha), (colunas[-1], linha), color=(0, 0, 0))
+        valores = [
+            ["Identificação", "Armazenamento", "Proteção", "Disposição"],
+            ["Medição", "CPROP", "Acesso por chave", "Não aplicável"],
+            ["Passagem", "APLAT", "Acesso controlado", "Permanente"],
+        ]
+        for indice_linha, valores_linha in enumerate(valores):
+            for indice_coluna, valor in enumerate(valores_linha):
+                pagina.insert_textbox(
+                    fitz.Rect(
+                        colunas[indice_coluna] + 2,
+                        linhas[indice_linha] + 2,
+                        colunas[indice_coluna + 1] - 2,
+                        linhas[indice_linha + 1] - 2,
+                    ),
+                    valor,
+                    fontsize=7,
+                )
+
+        texto, imagens = extrair_texto_e_imagens_pdf(documento.tobytes())
+        documento.close()
+
+        self.assertEqual(len(imagens), 1)
+        self.assertEqual(imagens[0]["formato"], "png")
+        self.assertGreater(imagens[0]["largura"], 700)
+        self.assertIn("CPROP", imagens[0]["textoAlternativo"])
+        self.assertIn("4. REGISTROS", texto)
+        self.assertIn("[[IMAGEM_PDF:1]]", texto)
+        self.assertNotIn("CPROP", texto)
 
     def test_operational_imperatives_and_passives_are_not_downgraded_to_information(self):
         blocos = separar_blocos(
@@ -1770,6 +1851,29 @@ class MatrizServicesTest(unittest.TestCase):
             self.assertIn("<xdr:row>1</xdr:row>", desenho)
             planilha = pacote.read("xl/worksheets/sheet1.xml").decode("utf-8")
             self.assertNotIn(">Informação<", planilha)
+
+    def test_table_image_keeps_text_fallback_in_csv_and_accessible_xlsx_description(self):
+        png_base64 = (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEA"
+            "tcGw5QAAAABJRU5ErkJggg=="
+        )
+        descricao = "Identifica\u00e7\u00e3o | Armazenamento | Prote\u00e7\u00e3o"
+        linha = {
+            "descricao": descricao,
+            "tipoTarefa": "Informa\u00e7\u00e3o",
+            "imagemBase64": png_base64,
+            "imagemFormato": "png",
+            "imagemLargura": 1,
+            "imagemAltura": 1,
+        }
+
+        csv_text = gerar_csv_matriz([linha])
+        xlsx = gerar_xlsx_matriz([linha])
+
+        self.assertIn(descricao, csv_text)
+        with zipfile.ZipFile(io.BytesIO(xlsx)) as pacote:
+            desenho = pacote.read("xl/drawings/drawing1.xml").decode("utf-8")
+        self.assertIn(descricao, desenho)
 
 
 if __name__ == "__main__":

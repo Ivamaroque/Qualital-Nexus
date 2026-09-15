@@ -26,7 +26,7 @@ def gerar_csv_matriz(linhas: list[dict[str, Any]]) -> str:
     writer.writeheader()
     proximo_id = 1
     for linha in linhas:
-        if linha.get("imagemBase64"):
+        if linha.get("imagemBase64") and not linha.get("descricao"):
             continue
         padrao_anexo = linha.get("tipoTarefa") == "Padrão/Anexo"
         identificador = "" if padrao_anexo else str(proximo_id)
