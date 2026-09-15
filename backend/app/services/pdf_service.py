@@ -252,14 +252,6 @@ def _linhas_formam_tabela_operacional(linhas: list[list[object]]) -> bool:
     )
 
 
-def _tabela_deve_ser_imagem(tabela: object) -> bool:
-    try:
-        linhas = [list(linha) for linha in tabela.extract()]
-    except (AttributeError, RuntimeError, TypeError, ValueError):
-        return False
-    return bool(linhas) and not _linhas_formam_tabela_operacional(linhas)
-
-
 def _recortar_tabela_como_png(page: fitz.Page, tabela: object) -> tuple[bytes, int, int] | None:
     try:
         area = fitz.Rect(tabela.bbox)
@@ -428,8 +420,13 @@ def _imagem_pdf_relevante(info: dict, frequencias: Counter[int]) -> bool:
     )
 
 
-def extrair_texto_e_imagens_pdf(pdf_bytes: bytes) -> tuple[str, list[dict]]:
+def extrair_texto_e_imagens_pdf(
+    pdf_bytes: bytes,
+    modo_tabelas: str = "imagem",
+) -> tuple[str, list[dict]]:
     """Extrai texto e figuras relevantes na mesma ordem visual do PDF."""
+    if modo_tabelas not in {"imagem", "texto"}:
+        raise ValueError("Modo de extração de tabelas inválido.")
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
             infos_por_pagina = [page.get_image_info(xrefs=True) for page in document]
@@ -510,7 +507,7 @@ def extrair_texto_e_imagens_pdf(pdf_bytes: bytes) -> tuple[str, list[dict]]:
                 if tabelas_relevantes:
                     tabelas_serializadas: list[object] = []
                     for tabela in tabelas_relevantes:
-                        if not _tabela_deve_ser_imagem(tabela):
+                        if modo_tabelas == "texto":
                             tabelas_serializadas.append(tabela)
                             continue
                         recorte = _recortar_tabela_como_png(page, tabela)

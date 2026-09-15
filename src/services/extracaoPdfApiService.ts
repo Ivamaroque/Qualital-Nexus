@@ -43,6 +43,11 @@ function getStatusEndpoint(endpoint: string, processingId: string) {
   return `${endpoint.replace(/\/$/, "")}/${processingId}/status`;
 }
 
+function getExtractionEndpoint(endpoint: string, tableMode: ExtracaoPdfRequestOptions["tableMode"]) {
+  const separator = endpoint.includes("?") ? "&" : "?";
+  return `${endpoint}${separator}table_mode=${encodeURIComponent(tableMode ?? "imagem")}`;
+}
+
 function startProgressPolling(endpoint: string, processingId: string, options: ExtracaoPdfRequestOptions) {
   let active = true;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -98,7 +103,7 @@ export async function processarExtracaoPdfApi(
 
   let response: Response;
   try {
-    response = await fetch(endpoint, {
+    response = await fetch(getExtractionEndpoint(endpoint, options.tableMode), {
       method: "POST",
       body: formData,
       headers

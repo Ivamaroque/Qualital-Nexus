@@ -19,6 +19,7 @@ from app.services.csv_service import CSV_COLUMNS, gerar_csv_matriz
 from app.services.xlsx_service import XLSX_COLUMNS, gerar_xlsx_matriz
 from app.services.document_service import (
     _extrair_texto_doc,
+    extrair_conteudo_documento,
     extrair_texto_documento,
     validar_documento,
 )
@@ -198,10 +199,30 @@ class MatrizServicesTest(unittest.TestCase):
                 ],
             ),
         ):
-            linhas, _debug = run(_processar_arquivos([arquivo], incluir_debug=False))
+            linhas, _debug = run(
+                _processar_arquivos(
+                    [arquivo],
+                    incluir_debug=False,
+                    modo_tabelas="texto",
+                )
+            )
 
-        extrator.assert_called_once_with(assinatura_doc + b"content", "anexo.doc")
+        extrator.assert_called_once_with(assinatura_doc + b"content", "anexo.doc", "texto")
         self.assertEqual(linhas[0]["descricao"], "OBJETIVO")
+
+    def test_document_service_forwards_table_mode_to_pdf_extractor(self):
+        with patch(
+            "app.services.document_service.extrair_texto_e_imagens_pdf",
+            return_value=("conteúdo", []),
+        ) as extrator:
+            resultado = extrair_conteudo_documento(
+                b"%PDF-1.4 teste",
+                "procedimento.pdf",
+                modo_tabelas="texto",
+            )
+
+        self.assertEqual(resultado, ("conteúdo", []))
+        extrator.assert_called_once_with(b"%PDF-1.4 teste", modo_tabelas="texto")
 
     def test_prompt_uses_examples_from_selected_parser_rules(self):
         regras = [
@@ -1134,6 +1155,43 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertIn("4. REGISTROS", texto)
         self.assertIn("[[IMAGEM_PDF:1]]", texto)
         self.assertNotIn("CPROP", texto)
+
+    def test_technical_pdf_table_can_be_extracted_as_structured_text(self):
+        documento = fitz.open()
+        pagina = documento.new_page(width=420, height=220)
+        colunas = [20, 210, 400]
+        linhas = [40, 80, 130]
+        for coluna in colunas:
+            pagina.draw_line((coluna, linhas[0]), (coluna, linhas[-1]), color=(0, 0, 0))
+        for linha in linhas:
+            pagina.draw_line((colunas[0], linha), (colunas[-1], linha), color=(0, 0, 0))
+        valores = [
+            ["Identificação", "Armazenamento"],
+            ["Medição da produção", "CPROP"],
+        ]
+        for indice_linha, valores_linha in enumerate(valores):
+            for indice_coluna, valor in enumerate(valores_linha):
+                pagina.insert_textbox(
+                    fitz.Rect(
+                        colunas[indice_coluna] + 3,
+                        linhas[indice_linha] + 3,
+                        colunas[indice_coluna + 1] - 3,
+                        linhas[indice_linha + 1] - 3,
+                    ),
+                    valor,
+                    fontsize=8,
+                )
+
+        texto, imagens = extrair_texto_e_imagens_pdf(
+            documento.tobytes(),
+            modo_tabelas="texto",
+        )
+        documento.close()
+
+        self.assertEqual(imagens, [])
+        self.assertIn("Identificação | Armazenamento", texto)
+        self.assertIn("Medição da produção | CPROP", texto)
+        self.assertNotIn("[[IMAGEM_PDF:", texto)
 
     def test_operational_imperatives_and_passives_are_not_downgraded_to_information(self):
         blocos = separar_blocos(

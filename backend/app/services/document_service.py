@@ -164,11 +164,15 @@ def _extrair_texto_docx(conteudo: bytes) -> str:
     return texto
 
 
-def extrair_conteudo_documento(conteudo: bytes, filename: str) -> tuple[str, list[dict]]:
+def extrair_conteudo_documento(
+    conteudo: bytes,
+    filename: str,
+    modo_tabelas: str = "imagem",
+) -> tuple[str, list[dict]]:
     """Extrai o texto e os recursos visuais relevantes de um documento."""
     extensao = validar_documento(filename, conteudo)
     if extensao == ".pdf":
-        return extrair_texto_e_imagens_pdf(conteudo)
+        return extrair_texto_e_imagens_pdf(conteudo, modo_tabelas=modo_tabelas)
     if extensao == ".doc":
         if conteudo.startswith(b"PK"):
             try:

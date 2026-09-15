@@ -3,6 +3,8 @@ export type ExtracaoPdfResult = {
   blob: Blob;
 };
 
+export type TableExtractionMode = "imagem" | "texto";
+
 export type ExtracaoPdfProgress = {
   status: "processando" | "concluido" | "erro";
   etapa: string;
@@ -23,4 +25,5 @@ export type ExtracaoPdfProgress = {
 export type ExtracaoPdfRequestOptions = {
   accessToken?: string;
   onProgress?: (progress: ExtracaoPdfProgress) => void;
+  tableMode?: TableExtractionMode;
 };

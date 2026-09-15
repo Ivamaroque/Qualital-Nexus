@@ -139,7 +139,10 @@ async def _arquivos_da_requisicao(request: Request) -> list[UploadFile]:
 
 
 async def _processar_arquivos(
-    arquivos: list[UploadFile], incluir_debug: bool, identificador_processamento: str | None = None
+    arquivos: list[UploadFile],
+    incluir_debug: bool,
+    identificador_processamento: str | None = None,
+    modo_tabelas: Literal["imagem", "texto"] = "imagem",
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     settings = get_settings()
     acumuladas: list[dict[str, str]] = []
@@ -152,6 +155,7 @@ async def _processar_arquivos(
         "regras_usadas_por_bloco": [],
         "preview_linhas_geradas": [],
         "falhas_lotes": [],
+        "modo_tabelas": modo_tabelas,
     }
     arquivos_preparados: list[dict[str, Any]] = []
 
@@ -172,7 +176,12 @@ async def _processar_arquivos(
                 detail=f"{filename} excede o limite de {settings.max_file_size_mb} MB.",
             )
         try:
-            texto, imagens = await run_in_threadpool(extrair_conteudo_documento, conteudo, filename)
+            texto, imagens = await run_in_threadpool(
+                extrair_conteudo_documento,
+                conteudo,
+                filename,
+                modo_tabelas,
+            )
             texto_limpo = await run_in_threadpool(limpar_texto_pdf, texto)
             blocos = await run_in_threadpool(separar_blocos, texto_limpo, filename)
             imagens_por_indice = {int(imagem["indice"]): imagem for imagem in imagens}
@@ -378,6 +387,7 @@ async def status_processamento(identificador: str) -> dict[str, Any]:
 async def processar_extracao_pdf(
     request: Request,
     formato: Literal["xlsx", "csv"] = Query(default="xlsx", alias="format"),
+    modo_tabelas: Literal["imagem", "texto"] = Query(default="imagem", alias="table_mode"),
 ) -> StreamingResponse:
     identificador = _identificador_processamento(request)
     if identificador:
@@ -385,7 +395,12 @@ async def processar_extracao_pdf(
     arquivos: list[UploadFile] = []
     try:
         arquivos = await _arquivos_da_requisicao(request)
-        linhas, debug = await _processar_arquivos(arquivos, incluir_debug=False, identificador_processamento=identificador)
+        linhas, debug = await _processar_arquivos(
+            arquivos,
+            incluir_debug=False,
+            identificador_processamento=identificador,
+            modo_tabelas=modo_tabelas,
+        )
         formato_nome = formato.upper()
         if identificador:
             atualizar_processamento(
@@ -439,10 +454,17 @@ async def processar_extracao_pdf(
 
 
 @router.post("/debug")
-async def depurar_extracao_pdf(request: Request) -> dict[str, Any]:
+async def depurar_extracao_pdf(
+    request: Request,
+    modo_tabelas: Literal["imagem", "texto"] = Query(default="imagem", alias="table_mode"),
+) -> dict[str, Any]:
     arquivos = await _arquivos_da_requisicao(request)
     try:
-        _, debug = await _processar_arquivos(arquivos, incluir_debug=True)
+        _, debug = await _processar_arquivos(
+            arquivos,
+            incluir_debug=True,
+            modo_tabelas=modo_tabelas,
+        )
         return debug
     finally:
         for arquivo in arquivos:

@@ -9,7 +9,7 @@ import { ProcessingSteps } from "@/components/ProcessingSteps";
 import { isAllowedExtractionFile } from "@/lib/fileValidation";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 import { processarExtracaoPdf } from "@/services/extracaoPdfService";
-import type { ExtracaoPdfProgress } from "@/types/extracaoPdf";
+import type { ExtracaoPdfProgress, TableExtractionMode } from "@/types/extracaoPdf";
 
 type QueueFile = {
   id: string;
@@ -62,6 +62,7 @@ function ExtracaoPdfContent() {
   const [processingProgress, setProcessingProgress] = useState<ExtracaoPdfProgress | null>(null);
   const [resultFilename, setResultFilename] = useState<string | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
+  const [tableExtractionMode, setTableExtractionMode] = useState<TableExtractionMode>("imagem");
 
   const canProcess = files.length > 0 && !isProcessing;
 
@@ -137,6 +138,13 @@ function ExtracaoPdfContent() {
     setSelectedFileError(null);
   }
 
+  function selectTableExtractionMode(mode: TableExtractionMode) {
+    setTableExtractionMode(mode);
+    setProcessingError(null);
+    setProcessingProgress(null);
+    resetResultState();
+  }
+
   async function handleProcessFiles() {
     if (files.length === 0) {
       setProcessingError("Adicione pelo menos um documento antes de processar.");
@@ -175,7 +183,8 @@ function ExtracaoPdfContent() {
 
       const result = await processarExtracaoPdf(files.map((entry) => entry.file), {
         accessToken,
-        onProgress: setProcessingProgress
+        onProgress: setProcessingProgress,
+        tableMode: tableExtractionMode
       });
       const url = URL.createObjectURL(result.blob);
       setResultFilename(result.filename);
@@ -269,6 +278,56 @@ function ExtracaoPdfContent() {
 
         <div className="extraction-grid">
           <div className="extraction-actions">
+            <section className="extraction-table-mode" aria-labelledby="table-extraction-mode-title">
+              <h2 id="table-extraction-mode-title">Tratamento das tabelas</h2>
+              <p className="extraction-table-mode__intro">
+                Escolha como as tabelas do PDF devem aparecer na matriz.
+              </p>
+              <div className="extraction-table-mode__options">
+                <label
+                  className={`extraction-table-mode__option ${
+                    tableExtractionMode === "imagem" ? "extraction-table-mode__option--selected" : ""
+                  }`}
+                >
+                  <input
+                    checked={tableExtractionMode === "imagem"}
+                    disabled={isProcessing}
+                    name="table-extraction-mode"
+                    onChange={() => selectTableExtractionMode("imagem")}
+                    type="radio"
+                    value="imagem"
+                  />
+                  <span>
+                    <strong>
+                      Imagem <span className="extraction-table-mode__badge">Padrão</span>
+                    </strong>
+                    <small>Preserva o formato visual das tabelas detectadas no PDF.</small>
+                  </span>
+                </label>
+                <label
+                  className={`extraction-table-mode__option ${
+                    tableExtractionMode === "texto" ? "extraction-table-mode__option--selected" : ""
+                  }`}
+                >
+                  <input
+                    checked={tableExtractionMode === "texto"}
+                    disabled={isProcessing}
+                    name="table-extraction-mode"
+                    onChange={() => selectTableExtractionMode("texto")}
+                    type="radio"
+                    value="texto"
+                  />
+                  <span>
+                    <strong>Texto estruturado</strong>
+                    <small>Organiza linhas e células para identificar informações e execuções.</small>
+                  </span>
+                </label>
+              </div>
+              <p className="extraction-table-mode__note">
+                Em arquivos DOC e DOCX, as tabelas continuam sendo extraídas como texto.
+              </p>
+            </section>
+
             <FileUploadArea
               disabled={isProcessing}
               errorMessage={selectedFileError}
@@ -295,11 +354,14 @@ function ExtracaoPdfContent() {
               steps={processingSteps}
             />
 
-            <section className="extraction-terminal-card" aria-live="polite" aria-label="Acompanhamento ao vivo">
+            <section 
+              className="extraction-terminal-card" 
+              aria-live="polite" 
+              aria-label="Acompanhamento ao vivo"
+            >
               <div className="row row--between">
                 <div>
-                  <p className="extraction-card-eyebrow">Acompanhamento ao vivo</p>
-                  <h2>Atualizações do processamento</h2>
+                  <p className="extraction-card-eyebrow">Atualizações do processamento</p>
                 </div>
                 {isProcessing || processingProgress?.status === "erro" ? (
                   <span className="extraction-status-pill extraction-status-pill--processing">
