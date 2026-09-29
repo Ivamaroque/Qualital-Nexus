@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 _RULE_FIELDS = "id,nome,descricao,ordem,escopo,padrao_regex,tipo_tarefa,categoria,exemplo_entrada,exemplo_saida_json"
 _MAX_RULE_TEXT_LENGTH = 12_000
 _CATEGORY_ALIASES = {
+    "aviso_informativo": {"observacao"},
     "atividade_tabela": {"atividade_tabela_2", "atividade_anomalia"},
     "anexo_documento": {"anexo"},
     "fragmento_interface": {"ruido_fluxograma", "ruido_metadado"},

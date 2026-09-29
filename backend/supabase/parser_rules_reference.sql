@@ -104,6 +104,39 @@ WITH regras (nome, descricao, ordem, escopo, padrao_regex, tipo_tarefa, categori
         '{"linhas":[{"tipoTarefa":"Execução"}]}'
     ),
     (
+        'Ação operacional na voz passiva',
+        'Reconhece ações operacionais expressas na voz passiva com os modais deve ou pode.',
+        216,
+        'geral',
+        '(?i)(?:^|\W)(?:deve|devem|pode|podem)\s+ser\s+(?:acionad|avaliad|parad|realizad|registrad)[oa]s?(?:$|\W)',
+        'Execução',
+        'instrucao_operacional',
+        'A bomba deve ser parada após a normalização do nível.',
+        '{"linhas":[{"tipoTarefa":"Execução"}]}'
+    ),
+    (
+        'Observações e alertas',
+        'Mantém observações e notas como informação mesmo quando citam uma ação possível.',
+        180,
+        'geral',
+        '(?im)^\s*(?:OBS(?:ERVA(?:[CÇ][AÃ]O|CAO))?\.?|NOTA|ATEN[CÇ][AÃ]O|LEMBRE-SE)\s*\d*\.?\s*:?.+',
+        'Informação',
+        'aviso_informativo',
+        'NOTA: Em qualquer situação o operador poderá alinhar as bombas.',
+        '{"linhas":[{"tipoTarefa":"Informação"}]}'
+    ),
+    (
+        'Legenda de tela operacional',
+        'Mantém legendas de telas e fluxogramas como informação, sem interpretar palavras do título como verbos.',
+        71,
+        'geral',
+        '(?i)^\s*TELA\s+\d+\s*[:\-–—]',
+        'Informação',
+        'legenda_figura',
+        'Tela 03: Esgotamento Casa de Bombas - Parte Inferior da tela.',
+        '{"linhas":[{"tipoTarefa":"Informação"}]}'
+    ),
+    (
         'lista_informativa',
         'Listas de recursos, premissas e referências permanecem informativas quando não contêm ação explícita.',
         100,
@@ -167,3 +200,33 @@ FROM regras AS r
 WHERE NOT EXISTS (
     SELECT 1 FROM public.parser_rules existente WHERE existente.nome = r.nome
 );
+
+UPDATE public.parser_rules
+SET descricao = 'Observações, notas e alertas devem permanecer como Informação, mesmo quando citam uma ação possível.',
+    ordem = 180,
+    escopo = 'geral',
+    padrao_regex = '(?im)^\s*(?:OBS(?:ERVA(?:[CÇ][AÃ]O|CAO))?\.?|NOTA|ATEN[CÇ][AÃ]O|LEMBRE-SE)\s*\d*\.?\s*:?.+',
+    tipo_tarefa = 'Informação',
+    categoria = 'aviso_informativo',
+    ativo = true
+WHERE nome = 'Observações e alertas';
+
+UPDATE public.parser_rules
+SET descricao = 'Reconhece ações operacionais expressas na voz passiva com os modais deve ou pode.',
+    ordem = 216,
+    escopo = 'geral',
+    padrao_regex = '(?i)(?:^|\W)(?:deve|devem|pode|podem)\s+ser\s+(?:acionad|avaliad|parad|realizad|registrad)[oa]s?(?:$|\W)',
+    tipo_tarefa = 'Execução',
+    categoria = 'instrucao_operacional',
+    ativo = true
+WHERE nome = 'Ação operacional na voz passiva';
+
+UPDATE public.parser_rules
+SET descricao = 'Mantém legendas de telas e fluxogramas como Informação, sem interpretar palavras do título como verbos.',
+    ordem = 71,
+    escopo = 'geral',
+    padrao_regex = '(?i)^\s*TELA\s+\d+\s*[:\-–—]',
+    tipo_tarefa = 'Informação',
+    categoria = 'legenda_figura',
+    ativo = true
+WHERE nome = 'Legenda de tela operacional';

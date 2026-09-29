@@ -16,7 +16,7 @@ def _normalizar_valor(valor: Any, preservar_quebras: bool = False) -> str:
 
 def normalizar_linhas(linhas: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalizadas: list[dict[str, Any]] = []
-    vistas: set[tuple[str, str, str, str, str, str]] = set()
+    vistas: set[tuple[str, str, str, str, str, str, str]] = set()
     for linha in linhas:
         descricao = _normalizar_valor(linha.get("descricao"), preservar_quebras=True)
         tipo = _normalizar_valor(linha.get("tipoTarefa"))
@@ -30,12 +30,14 @@ def normalizar_linhas(linhas: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         subtarefa = _normalizar_valor(linha.get("subtarefaHTA"))
         descricao_tarefa = _normalizar_valor(linha.get("descricaoTarefa"), preservar_quebras=True)
+        executante = _normalizar_valor(linha.get("executante"))
         chave = (
             item,
             " ".join(descricao.split()),
             tipo,
             subtarefa,
             " ".join(descricao_tarefa.split()),
+            executante,
             imagem_base64,
         )
         if chave in vistas:
@@ -48,6 +50,7 @@ def normalizar_linhas(linhas: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "tipoTarefa": tipo,
                 "subtarefaHTA": subtarefa,
                 "descricaoTarefa": descricao_tarefa,
+                "executante": executante,
                 **({
                     "imagemBase64": imagem_base64,
                     "imagemFormato": _normalizar_valor(linha.get("imagemFormato")) or "png",

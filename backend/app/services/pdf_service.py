@@ -88,6 +88,7 @@ _MIN_IMAGE_HEIGHT = 80
 _MIN_IMAGE_AREA = 15_000
 _REPEATED_IMAGE_THRESHOLD = 3
 _FIGURE_CAPTION_RE = re.compile(r"^[•\-]?\s*FIGURA\s+\d+\s*[-–—:]", re.IGNORECASE)
+_SCREEN_CAPTION_RE = re.compile(r"^TELA\s+\d+\s*[:\-–—]", re.IGNORECASE)
 _SPECIAL_BLOCK_START_RE = re.compile(
     r"^(?:LISTA\s+DE\s+VERIFICAÇÃO|OBSERVAÇÕES?\s+(?:PRELIMINARES|\d+)|COMO\s+FAZER|O\s+QUE\s+FAZER"
     r"|RESULTADO\s+ESPERADO|AÇÕES\s+PARA\s+DESVIOS)\s*[:.]?",
@@ -108,7 +109,7 @@ _ACTION_IMPERATIVE_RE = re.compile(
     r"comunique|comunicar|confirme|confirmar|digite|digitar|escolha|escolher|feche|fechar|informe|informar|"
     r"inspecione|inspecionar|instale|instalar|interrompa|interromper|isole|isolar|ligue|ligar|"
     r"mantenha|manter|observe|observar|pe[cç]a|pedir|posicione|posicionar|preencha|preencher|realize|realizar|recoloque|recolocar|"
-    r"regule|regular|retorne|retornar|retire|retirar|selecione|selecionar|solicite|solicitar|suba|subir|teste|testar|trave|travar|"
+    r"pare|parar|parta|partir|regule|regular|retorne|retornar|retire|retirar|selecione|selecionar|solicite|solicitar|suba|subir|teste|testar|trave|travar|"
     r"use|usar|utilize|utilizar|verifique|verificar|certifique|certificar|varie|variar)\b",
     re.IGNORECASE,
 )
@@ -152,6 +153,18 @@ _OBSERVATION_RE = re.compile(
     r"^OBS(?:ERVA(?:ÇÃO|CAO))?\s*:",
     re.IGNORECASE,
 )
+_NOTICE_RE = re.compile(
+    r"^(?:OBS(?:ERVA(?:ÇÃO|CAO))?|NOTA|ATENÇÃO)\s*\d*\.?\s*:",
+    re.IGNORECASE,
+)
+_TABLE_EXECUTOR_MARKER_RE = re.compile(
+    r"\s*\[\[EXECUTANTE_TABELA:(?P<executante>[^\]]+)\]\]\s*",
+    re.IGNORECASE,
+)
+_TABLE_REGISTER_SUFFIX_RE = re.compile(
+    r"^(?P<executante>.+?)\s+(?:APLAT|CPROP|BDOC|SAP)(?:\s+E\s+(?:APLAT|CPROP|BDOC|SAP))*$",
+    re.IGNORECASE,
+)
 _ACTION_CUE_RE = re.compile(
     r"\b(?:dever[aá]|dever[aã]o|deve-se|devem-se|deve|devem|recomenda-se|abortar|abrir|aguardar|isolar|ligar|"
     r"realizar|solicitar|bloquear|acionar|"
@@ -183,9 +196,9 @@ _NECESSITY_ACTION_RE = re.compile(
     re.IGNORECASE,
 )
 _ACTIONABLE_PASSIVE_RE = re.compile(
-    r"\bdev(?:e|em|er[aá]|er[aã]o)\s+ser\s+"
-    r"(?:acionad|bloquead|colocad|comunicad|dad|desligad|emitid|lan[cç]ad|mantid|mobilizad|"
-    r"preenchid|realizad|registrad|solicitad|tomad)[oa]s?\b",
+    r"\b(?:dev(?:e|em|er[aá]|er[aã]o)|pod(?:e|em|er[aá]|er[aã]o))\s+ser\s+"
+    r"(?:acionad|avaliad|bloquead|colocad|comunicad|dad|desligad|emitid|lan[cç]ad|mantid|mobilizad|"
+    r"parad|preenchid|realizad|registrad|solicitad|tomad)[oa]s?\b",
     re.IGNORECASE,
 )
 
@@ -252,6 +265,22 @@ def _linhas_formam_tabela_operacional(linhas: list[list[object]]) -> bool:
     )
 
 
+def _serializar_tabela_operacional_para_parser(tabela: object) -> str:
+    partes = re.split(r"\n\s*\n", _serializar_tabela(tabela, incluir_executante=True))
+    selecionadas = []
+    for parte in partes:
+        trecho = parte.strip()
+        normalizado = normalized_for_match(trecho)
+        if (
+            normalizado == "O QUE FAZER EXECUTANTE ONDE REGISTRAR"
+            or _ATIVIDADE_TABELA_RE.match(trecho)
+            or _OPERATIONAL_TABLE_ROW_RE.match(trecho)
+            or normalizado.startswith(("COMO FAZER", "PORQUE FAZER"))
+        ):
+            selecionadas.append(trecho)
+    return "\n\n".join(selecionadas)
+
+
 def _recortar_tabela_como_png(page: fitz.Page, tabela: object) -> tuple[bytes, int, int] | None:
     try:
         area = fitz.Rect(tabela.bbox)
@@ -271,7 +300,7 @@ def _recortar_tabela_como_png(page: fitz.Page, tabela: object) -> tuple[bytes, i
         return None
 
 
-def _serializar_tabela(tabela: object) -> str:
+def _serializar_tabela(tabela: object, *, incluir_executante: bool = False) -> str:
     linhas = [list(linha) for linha in tabela.extract()]
     cabecalho_normalizado = (
         normalized_for_match(" ".join(str(celula or "") for celula in linhas[0]))
@@ -359,7 +388,13 @@ def _serializar_tabela(tabela: object) -> str:
                 serializadas[-1] = f"{serializadas[-1]} {celulas[1]}".strip()
                 continue
             if _ATIVIDADE_TABELA_RE.match(primeira) and any(celulas[1:]):
-                serializadas.append(primeira)
+                executante = celulas[1] if len(celulas) > 1 else ""
+                marcador = (
+                    f" [[EXECUTANTE_TABELA:{executante}]]"
+                    if incluir_executante and executante
+                    else ""
+                )
+                serializadas.append(f"{primeira}{marcador}")
                 continue
             if normalizada.startswith("COMO FAZER"):
                 partes = re.split(r"(?=PORQUE\s+FAZER\s*:)", primeira, maxsplit=1, flags=re.IGNORECASE)
@@ -373,7 +408,7 @@ def _extrair_pagina_com_tabelas(
     page: fitz.Page,
     tabelas: list[object],
     imagens: list[tuple[float, str]] | None = None,
-    tabelas_serializadas: list[object] | None = None,
+    eventos_tabela: list[tuple[float, str]] | None = None,
 ) -> str:
     eventos: list[tuple[float, str]] = []
     bboxes_tabelas = [tabela.bbox for tabela in tabelas]
@@ -399,8 +434,13 @@ def _extrair_pagina_com_tabelas(
         if linhas_fora:
             eventos.append((posicao_y or 0, "\n".join(linhas_fora)))
 
-    tabelas_para_texto = tabelas if tabelas_serializadas is None else tabelas_serializadas
-    eventos.extend((tabela.bbox[1], _serializar_tabela(tabela)) for tabela in tabelas_para_texto)
+    if eventos_tabela is None:
+        eventos.extend(
+            (tabela.bbox[1], _serializar_tabela(tabela, incluir_executante=True))
+            for tabela in tabelas
+        )
+    else:
+        eventos.extend(eventos_tabela)
     eventos.extend(imagens or [])
     return "\n\n".join(texto for _, texto in sorted(eventos, key=lambda evento: evento[0]) if texto.strip())
 
@@ -505,17 +545,30 @@ def extrair_texto_e_imagens_pdf(
                     and not any(_bboxes_se_sobrepoem(tabela.bbox, bbox) for bbox in bboxes_imagem)
                 ]
                 if tabelas_relevantes:
-                    tabelas_serializadas: list[object] = []
+                    eventos_tabela: list[tuple[float, str]] = []
                     for tabela in tabelas_relevantes:
                         if modo_tabelas == "texto":
-                            tabelas_serializadas.append(tabela)
+                            eventos_tabela.append(
+                                (
+                                    tabela.bbox[1],
+                                    _serializar_tabela(tabela, incluir_executante=True),
+                                )
+                            )
                             continue
                         recorte = _recortar_tabela_como_png(page, tabela)
                         if recorte is None:
-                            tabelas_serializadas.append(tabela)
+                            eventos_tabela.append(
+                                (
+                                    tabela.bbox[1],
+                                    _serializar_tabela(tabela, incluir_executante=True),
+                                )
+                            )
                             continue
                         conteudo, largura, altura = recorte
-                        texto_alternativo = _serializar_tabela(tabela)
+                        texto_alternativo = _TABLE_EXECUTOR_MARKER_RE.sub(
+                            " ",
+                            _serializar_tabela(tabela),
+                        ).strip()
                         indice = len(imagens_extraidas) + 1
                         imagens_extraidas.append(
                             {
@@ -529,12 +582,17 @@ def extrair_texto_e_imagens_pdf(
                             }
                         )
                         eventos_imagem.append((tabela.bbox[1], f"[[IMAGEM_PDF:{indice}]]"))
+                        linhas_tabela = [list(linha) for linha in tabela.extract()]
+                        if _linhas_formam_tabela_operacional(linhas_tabela):
+                            texto_operacional = _serializar_tabela_operacional_para_parser(tabela)
+                            if texto_operacional:
+                                eventos_tabela.append((tabela.bbox[1], texto_operacional))
                     paginas.append(
                         _extrair_pagina_com_tabelas(
                             page,
                             tabelas_relevantes,
                             eventos_imagem,
-                            tabelas_serializadas,
+                            eventos_tabela,
                         )
                     )
                     continue
@@ -585,6 +643,13 @@ def limpar_texto_pdf(texto: str) -> str:
             continue
         if normalizada.startswith(("APROVADO POR", "GERIDO POR", "GESTÃO DO DOCUMENTO", "GESTAO DO DOCUMENTO")):
             continue
+        if (
+            linhas_limpas
+            and re.search(r"\b[A-Z]{1,8}-$", linhas_limpas[-1])
+            and re.match(r"^[A-Z0-9]", linha)
+        ):
+            linhas_limpas[-1] = f"{linhas_limpas[-1]}{linha}"
+            continue
         linhas_limpas.append(linha)
     return "\n".join(linhas_limpas).strip()
 
@@ -594,8 +659,10 @@ def detectar_categoria(texto: str) -> str:
     primeira_linha = texto.splitlines()[0] if texto else ""
     if _is_image_marker(primeira_linha):
         return "imagem"
-    if _FIGURE_CAPTION_RE.match(primeira_linha):
+    if _FIGURE_CAPTION_RE.match(primeira_linha) or _SCREEN_CAPTION_RE.match(primeira_linha):
         return "legenda_figura"
+    if _NOTICE_RE.match(primeira_linha):
+        return "aviso_informativo"
     if normalizado.rstrip(".:") == "LISTA DE VERIFICACAO":
         return "lista_verificacao"
     texto_sem_item = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*(?:[-–—]\s*)?", "", normalizado)
@@ -1126,7 +1193,7 @@ def _texto_tem_acoes_explicitas(texto: str) -> bool:
     if (
         _ACTION_START_RE.match(conteudo)
         or _ACTION_IMPERATIVE_RE.search(conteudo)
-        or _FINITE_OPERATIONAL_ACTION_RE.search(conteudo)
+        or _tem_acao_finita_operacional(conteudo)
         or _REQUIRED_RESOURCE_RE.match(conteudo)
         or _FUNDAMENTAL_REQUIREMENT_RE.match(conteudo)
         or _NECESSITY_ACTION_RE.search(conteudo)
@@ -1137,6 +1204,19 @@ def _texto_tem_acoes_explicitas(texto: str) -> bool:
     if "DEVE-SE SEGUIR" in normalizado or "RECOMENDA-SE COLETAR" in normalizado:
         return True
     return len(_ACTION_CUE_RE.findall(sem_negativas)) >= 2
+
+
+def _tem_acao_finita_operacional(texto: str) -> bool:
+    sujeitos_humanos = re.compile(
+        r"\b(?:equipe|executante|marinheiro|oficial|operador|supervis[aã]o|t[eé]cnic[oa])\b",
+        re.IGNORECASE,
+    )
+    for correspondencia in _FINITE_OPERATIONAL_ACTION_RE.finditer(texto):
+        prefixo = texto[:correspondencia.start()]
+        prefixo_sentenca = re.split(r"[.!?]", prefixo)[-1]
+        if not prefixo_sentenca.strip() or sujeitos_humanos.search(prefixo_sentenca):
+            return True
+    return False
 
 
 def _item_numerado_tem_acao_explicita(texto: str) -> bool:
@@ -1164,6 +1244,7 @@ def _juntar_linhas_do_bloco(linhas: list[str]) -> str:
             and re.match(r"^\d+\.\s+\S+", trecho)
         ):
             linhas_logicas[-1] = f"{linhas_logicas[-1]} {trecho}".strip()
+            continue
         elif linhas_logicas and (
             _is_image_marker(trecho)
             or _FIGURE_CAPTION_RE.match(trecho)
@@ -1178,7 +1259,7 @@ def _juntar_linhas_do_bloco(linhas: list[str]) -> str:
         else:
             linhas_logicas.append(trecho)
     return re.sub(
-        r"\b([A-Z]{1,5})-\s+(?=\d)",
+        r"\b([A-Z]{1,8})-\s+(?=[A-Z0-9])",
         r"\1-",
         "\n".join(linhas_logicas),
     )
@@ -1258,6 +1339,7 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
             or lista_verificacao
             or observacao_numerada
             or observacao_simples
+            or _NOTICE_RE.match(linha)
             or _PROCESS_REFERENCE_RE.match(linha)
             or _TECHNICAL_MARKER_RE.match(linha)
             or fluxograma_standalone
@@ -1350,12 +1432,19 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
     lista_tarefas_raiz = ""
     tarefa_lista_contextual = ""
     em_lista_verificacao = False
+    aguardando_atividade_tabela = False
+    executante_tabela_pendente = ""
     anexos_documento_vistos: set[str] = set()
     escopos_explicitos = {"anexo", "tabela_2", "tabela_5", "tabela_desvios", "tabelas_tecnicas"}
     for ordem, linhas in enumerate(blocos, start=1):
         bloco_texto = _juntar_linhas_do_bloco(linhas)
         if not bloco_texto:
             continue
+        executante_tabela = ""
+        marcador_executante = _TABLE_EXECUTOR_MARKER_RE.search(bloco_texto)
+        if marcador_executante:
+            executante_tabela = normalize_whitespace(marcador_executante.group("executante"))
+            bloco_texto = _TABLE_EXECUTOR_MARKER_RE.sub(" ", bloco_texto).strip()
         escopo_detectado = detectar_escopo(bloco_texto)
         if escopo_detectado == "tabela_desvios":
             tabela_encontrada = re.match(r"^TABELA\s*(\d+)\b", normalized_for_match(bloco_texto))
@@ -1633,8 +1722,8 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
         )
         if texto_sem_numeracao.lower().startswith("não "):
             categoria = "geral"
-        if normalized_for_match(bloco_texto).startswith("OBSERVACAO"):
-            categoria = "geral"
+        if _NOTICE_RE.match(bloco_texto):
+            categoria = "aviso_informativo"
             candidato_acao = False
         titulo_estrutural = (
             _eh_titulo_estrutural(linhas[0])
@@ -1687,6 +1776,12 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
             contexto_tarefa = {"listaTarefasRaiz": lista_tarefas_raiz, "tarefaLista": tarefa_lista_contextual, "nivelLista": "item_lista_verificacao"}
         elif tarefa_lista_contextual and categoria == "instrucao_operacional" and item_sem_ponto == tarefa_lista_contextual:
             contexto_tarefa = {"listaTarefasRaiz": lista_tarefas_raiz, "tarefaLista": tarefa_lista_contextual, "nivelLista": "tarefa"}
+        elif tarefa_lista_contextual and categoria == "aviso_informativo":
+            contexto_tarefa = {
+                "listaTarefasRaiz": lista_tarefas_raiz,
+                "tarefaLista": tarefa_lista_contextual,
+                "nivelLista": "item_lista_verificacao",
+            }
         atividade_encontrada = _ATIVIDADE_TABELA_RE.match(linhas[0]) if escopo_contextual == "tabela_2" else None
         if categoria == "atividade_tabela_2" and atividade_encontrada:
             indice_atividade = atividade_encontrada.group(1)
@@ -1706,6 +1801,22 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
                     else f"__etapa_{etapa_operacional}_{secao_atividade_operacional}"
                 ),
             }
+        if categoria == "cabecalho_tabela" and all(
+            termo in normalized_for_match(bloco_texto)
+            for termo in ("O QUE FAZER", "EXECUTANTE", "ONDE REGISTRAR")
+        ):
+            aguardando_atividade_tabela = True
+            executante_tabela_pendente = ""
+        elif aguardando_atividade_tabela and categoria == "geral":
+            celulas_mescladas = _TABLE_REGISTER_SUFFIX_RE.match(bloco_texto)
+            if celulas_mescladas:
+                executante_tabela_pendente = normalize_whitespace(
+                    celulas_mescladas.group("executante")
+                )
+        elif aguardando_atividade_tabela and categoria == "instrucao_operacional":
+            executante_tabela = executante_tabela or executante_tabela_pendente
+            aguardando_atividade_tabela = False
+            executante_tabela_pendente = ""
         resultado.append(
             {
                 "ordem": ordem,
@@ -1716,6 +1827,7 @@ def separar_blocos(texto: str, nome_arquivo: str = "") -> list[dict]:
                 "escopo": escopo_contextual,
                 "palavras_chave": extrair_palavras_chave(bloco_texto),
                 "contextoTarefa": contexto_tarefa,
+                "executanteDetectado": executante_tabela,
                 "secaoContextual": secao_contextual,
                 "tituloEstrutural": titulo_estrutural,
                 "listaAgrupada": lista_agrupada,

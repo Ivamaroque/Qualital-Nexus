@@ -9,6 +9,7 @@ CSV_COLUMNS = (
     "ID da Subtarefa",
     "Subtarefa (HTA)",
     "Descrição da tarefa",
+    "Executante",
 )
 
 
@@ -40,6 +41,7 @@ def gerar_csv_matriz(linhas: list[dict[str, Any]]) -> str:
                 "ID da Subtarefa": identificador,
                 "Subtarefa (HTA)": _campo_csv(linha.get("subtarefaHTA")),
                 "Descrição da tarefa": _campo_csv(linha.get("descricaoTarefa")),
+                "Executante": _campo_csv(linha.get("executante")),
             }
         )
     return "\ufeff" + output.getvalue()

@@ -11,6 +11,7 @@ XLSX_COLUMNS = (
     "Tipo da tarefa",
     "ID da Subtarefa",
     "Descrição da tarefa (HTA)",
+    "Executante",
 )
 
 _PACKAGE_RELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -102,7 +103,7 @@ def gerar_xlsx_matriz(linhas: list[dict[str, Any]]) -> bytes:
         if not padrao_anexo and not tem_imagem:
             proximo_id += 1
         dados.append(
-            ["", "", "", "", "", ""]
+            ["", "", "", "", "", "", ""]
             if tem_imagem
             else [
                 _campo_planilha(linha.get("subtarefaHTA")),
@@ -111,6 +112,7 @@ def gerar_xlsx_matriz(linhas: list[dict[str, Any]]) -> bytes:
                 _campo_planilha(linha.get("tipoTarefa")),
                 identificador,
                 _campo_planilha(linha.get("descricaoTarefa")),
+                _campo_planilha(linha.get("executante")),
             ]
         )
         if tem_imagem:
@@ -163,7 +165,7 @@ def gerar_xlsx_matriz(linhas: list[dict[str, Any]]) -> bytes:
     sheet = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
 <dimension ref="A1:{ultima_coluna}{ultima_linha}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews>
-<sheetFormatPr defaultRowHeight="18"/><cols><col min="1" max="1" width="16" customWidth="1"/><col min="2" max="2" width="24" customWidth="1"/><col min="3" max="3" width="60" customWidth="1"/><col min="4" max="4" width="20" customWidth="1"/><col min="5" max="5" width="16" customWidth="1"/><col min="6" max="6" width="60" customWidth="1"/></cols>
+<sheetFormatPr defaultRowHeight="18"/><cols><col min="1" max="1" width="16" customWidth="1"/><col min="2" max="2" width="24" customWidth="1"/><col min="3" max="3" width="60" customWidth="1"/><col min="4" max="4" width="20" customWidth="1"/><col min="5" max="5" width="16" customWidth="1"/><col min="6" max="6" width="60" customWidth="1"/><col min="7" max="7" width="30" customWidth="1"/></cols>
 <sheetData>{"".join(linhas_xml)}</sheetData><autoFilter ref="A1:{ultima_coluna}{ultima_linha}"/>{drawing_tag}
 </worksheet>'''
 

@@ -13,6 +13,7 @@ class MatrizLinha(BaseModel):
     tipoTarefa: TipoTarefa
     subtarefaHTA: str = ""
     descricaoTarefa: str = ""
+    executante: str = ""
 
 
 class MatrizOutput(BaseModel):

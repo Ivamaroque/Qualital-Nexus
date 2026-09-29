@@ -29,10 +29,11 @@ SYSTEM_PROMPT = (
 JSON_OUTPUT_INSTRUCTION = (
     'Responda somente com um objeto JSON, sem markdown ou texto adicional, no formato '
     '{"linhas":[{"ordemBloco":1,"itemPadrao":"","descricao":"","tipoTarefa":"Execução",'
-    '"subtarefaHTA":"","descricaoTarefa":""}]}. A chave raiz obrigatória é "linhas". '
+    '"subtarefaHTA":"","descricaoTarefa":"","executante":""}]}. A chave raiz obrigatória é "linhas". '
     'Cada item de "linhas" deve conter "ordemBloco", "descricao" e "tipoTarefa". Para cada bloco recebido, '
     'retorne ao menos uma linha com a mesma ordemBloco; use tipoTarefa "Ignorar" somente para ruído. '
-    'Os únicos valores de saída para tipoTarefa são "Padrão/Anexo", "Título/Subtítulo", "Informação" e "Execução".'
+    'Os únicos valores de saída para tipoTarefa são "Padrão/Anexo", "Título/Subtítulo", "Informação" e "Execução". '
+    'Deixe executante vazio; esse campo será preenchido deterministicamente a partir do texto-fonte.'
 )
 
 JSON_RETRY_INSTRUCTION = (
@@ -60,6 +61,7 @@ _TIPOS_TAREFA_POR_CATEGORIA = {
     "linha_tabela_desvios": "Execução",
     "como_fazer": "Execução",
     "porque_fazer": "Informação",
+    "aviso_informativo": "Informação",
     "fragmento_interface": "Ignorar",
     "cabecalho_documento_repetido": "Ignorar",
     "anexo_cabecalho_repetido": "Ignorar",
@@ -279,7 +281,7 @@ _ACTION_VERB_RE = (
     r"alinhe|alinhar|amarre|amarrar|anote|anotar|aperte|apertar|aplique|aplicar|aproxime|aproximar|"
     r"atente|atentar|atue|atuar|avalie|avaliar|avise|avisar|baixe|baixar|bloqueie|bloquear|"
     r"certifique|certificar|clique|clicar|colete|coletar|coloque|colocar|comunique|comunicar|"
-    r"continue|continuar|digite|digitar|escolha|escolher|etiquete|etiquetar|feche|fechar|"
+    r"continue|continuar|digite|digitar|drena-se|drenar|escolha|escolher|etiquete|etiquetar|feche|fechar|"
     r"desconecte|desconectar|despressurize|despressurizar|dirija-se|dirigir-se|eleve|elevar|"
     r"fique|ficar|garanta|garantir|informe|informar|inspecione|inspecionar|instale|instalar|interrompa|interromper|"
     r"isole|isolar|lacrar|leia|ler|leve|levar|levante|levantar|ligue|ligar|mantenha|manter|normalize|normalizar|"
@@ -296,7 +298,7 @@ _ACTION_VERB_RE = (
     r"normaliza|obt[eé]m|orienta|parte|pede|posiciona|recolhe|registra|regula|reinicia|realiza|seleciona)"
 )
 _MODAL_ACTION_RE = (
-    r"(?:dever[aá]|dever[aã]o|devem-se|deve-se|devem|deve|recomenda-se|poder[aá])"
+    r"(?:dever[aá]|dever[aã]o|devem-se|deve-se|devem|deve|recomenda-se|poder[aá]|podem|pode)"
 )
 _FUTURE_PASSIVE_ACTION_RE = re.compile(
     r"\bser(?:á|ão)\s+"
@@ -306,6 +308,7 @@ _FUTURE_PASSIVE_ACTION_RE = re.compile(
 )
 _PASSIVE_TO_INFINITIVE = {
     "acionad": "Acionar",
+    "avaliad": "Avaliar",
     "bloquead": "Bloquear",
     "colocad": "Colocar",
     "comunicad": "Comunicar",
@@ -316,6 +319,7 @@ _PASSIVE_TO_INFINITIVE = {
     "lancad": "Lançar",
     "mantid": "Manter",
     "mobilizad": "Mobilizar",
+    "parad": "Parar",
     "preenchid": "Preencher",
     "realizad": "Realizar",
     "registrad": "Registrar",
@@ -331,10 +335,12 @@ _FINITE_ACTION_TO_INFINITIVE = {
     "avisa": "Avisar",
     "certifica-se": "Certificar-se",
     "coleta": "Coletar",
+    "coleta-se": "Coletar",
     "coloca": "Colocar",
     "confirma": "Confirmar",
     "continua": "Continuar",
     "desliga": "Desligar",
+    "drena-se": "Drenar",
     "emite": "Emitir",
     "entrega": "Entregar",
     "efetuará": "Efetuar",
@@ -481,6 +487,13 @@ def _normalizar_acao_para_infinitivo(texto: str) -> str:
     modal = re.match(rf"^{_MODAL_ACTION_RE}\s+(.+)$", acao, re.IGNORECASE)
     if modal:
         acao = modal.group(1).strip()
+    acao = re.sub(
+        r"^ent[aã]o\s*,?\s*(?=" + _ACTION_VERB_RE + r"\b)",
+        "",
+        acao,
+        flags=re.IGNORECASE,
+    )
+    acao = re.sub(r"^se\s+(certificar)\b", r"\1-se", acao, flags=re.IGNORECASE)
     acao = _converter_passiva_para_ativa(acao)
     # Recupera o erro textual comum "deve-se para X, alinhar..." somente quando
     # a continuação comprova que se trata do verbo "parar", não da preposição.
@@ -490,7 +503,7 @@ def _normalizar_acao_para_infinitivo(texto: str) -> str:
         acao,
         flags=re.IGNORECASE,
     )
-    primeira_palavra = acao.split(maxsplit=1)[0] if acao else ""
+    primeira_palavra = acao.split(maxsplit=1)[0].rstrip(",;:") if acao else ""
     infinitivo = (
         _GERUND_TO_INFINITIVE.get(primeira_palavra.lower())
         or _IMPERATIVE_TO_INFINITIVE.get(primeira_palavra.lower())
@@ -641,6 +654,8 @@ def _resolver_referencias_locais(acao: str, fonte_anterior: str) -> str:
 
 def _normalizar_acao_com_contexto(texto: str) -> str:
     trecho = texto.strip(" ,;.")
+    trecho = re.sub(r"^ent[aã]o\s*,?\s*", "", trecho, flags=re.IGNORECASE)
+    trecho = re.sub(r"^se\s+(certificar)\b", r"\1-se", trecho, flags=re.IGNORECASE)
     inicio_acao = re.search(rf"\b{_ACTION_VERB_RE}\b", trecho, re.IGNORECASE)
     if not inicio_acao or inicio_acao.start() == 0:
         return _normalizar_acao_para_infinitivo(trecho)
@@ -718,6 +733,12 @@ def _extrair_acoes_explicitas(texto: str) -> list[str]:
     acoes: list[str] = []
     for sentenca in sentencas:
         sentenca = re.sub(r"^\s*(?:[-–—•·]|[a-z][)])\s*", "", sentenca, flags=re.IGNORECASE)
+        if re.match(
+            r"^(?:OBS(?:ERVA(?:ÇÃO|CAO))?|NOTA|ATENÇÃO)\s*\d*\.?\s*:",
+            sentenca,
+            re.IGNORECASE,
+        ):
+            continue
         if re.search(r"\bnão\s+dev(?:e|em|erá|erão)\b", sentenca, re.IGNORECASE):
             continue
         sentenca = re.sub(
@@ -769,6 +790,7 @@ def _extrair_acoes_explicitas(texto: str) -> list[str]:
             if acao_interna
             else ""
         )
+        trecho = re.sub(r"^ent[aã]o\s*,?\s*", "", trecho, flags=re.IGNORECASE)
         if not trecho:
             continue
         inicio_trecho = (
@@ -807,7 +829,91 @@ def _extrair_acoes_explicitas(texto: str) -> list[str]:
                 re.IGNORECASE,
             )
         ]
+        normalizadas = [normalized_for_match(acao) for acao in acoes]
+        acoes = [
+            acao
+            for indice, acao in enumerate(acoes)
+            if not any(
+                outro_indice != indice
+                and len(outro) > len(normalizadas[indice])
+                and outro.startswith(re.sub(r"\s+\d+$", "", normalizadas[indice]))
+                for outro_indice, outro in enumerate(normalizadas)
+            )
+        ]
     return acoes
+
+
+_EXECUTANTES = (
+    (
+        re.compile(
+            r"\b(?:operador de embarca[cç][aã]o|operador de opera[cç][aã]o) controle\b",
+            re.IGNORECASE,
+        ),
+        "Operador de Controle (E1)",
+    ),
+    (
+        re.compile(r"\boperador de embarca[cç][aã]o campo\b", re.IGNORECASE),
+        "Operador de Campo (EX)",
+    ),
+    (
+        re.compile(r"\bt[eé]cnico de seguran[cç]a\b", re.IGNORECASE),
+        "Técnico de Segurança do Trabalho",
+    ),
+    (re.compile(r"\bequipe de embarca[cç][aã]o\b", re.IGNORECASE), "Equipe de Embarcação"),
+)
+
+
+def _localizar_executantes(texto_fonte: str) -> list[str]:
+    fonte = " ".join(texto_fonte.split())
+    encontrados = [
+        (correspondencia.start(), rotulo)
+        for padrao, rotulo in _EXECUTANTES
+        for correspondencia in padrao.finditer(fonte)
+    ]
+    return list(dict.fromkeys(rotulo for _posicao, rotulo in sorted(encontrados)))
+
+
+def _selecionar_executante(executantes: list[str], descricao_tarefa: str) -> str:
+    if not executantes:
+        return ""
+    tarefa = normalized_for_match(descricao_tarefa)
+    if "MONITORACAO DO AMBIENTE" in tarefa:
+        tecnico = next((rotulo for rotulo in executantes if rotulo.startswith("Técnico")), "")
+        if tecnico:
+            return tecnico
+    if tarefa.startswith("AVALIAR DE FORMA SEGURA A ORIGEM"):
+        equipe = next((rotulo for rotulo in executantes if rotulo == "Equipe de Embarcação"), "")
+        if equipe:
+            return equipe
+    if tarefa.startswith("SOLICITAR AO OPERADOR DE EMBARCACAO CAMPO") and len(executantes) > 1:
+        return "|".join(executantes[:2])
+    return executantes[0]
+
+
+def _preencher_executantes(blocos: list[dict[str, Any]], matriz: MatrizOutput) -> MatrizOutput:
+    executantes_por_ordem = {
+        int(bloco["ordem"]): (
+            [str(bloco["executanteDetectado"]).strip()]
+            if str(bloco.get("executanteDetectado") or "").strip()
+            else _localizar_executantes(str(bloco.get("texto") or ""))
+        )
+        for bloco in blocos
+    }
+    return MatrizOutput(
+        linhas=[
+            linha.model_copy(
+                update={
+                    "executante": _selecionar_executante(
+                        executantes_por_ordem.get(linha.ordemBloco, []),
+                        linha.descricaoTarefa,
+                    )
+                }
+            )
+            if linha.tipoTarefa == "Execução"
+            else linha
+            for linha in matriz.linhas
+        ]
+    )
 
 
 def _extrair_acoes_como_fazer(texto: str) -> list[str]:
@@ -1053,9 +1159,71 @@ def _criar_linhas_de_fallback(bloco: dict[str, Any]) -> list[MatrizLinha]:
         ]
     if categoria == "legenda_figura" and linhas_fonte:
         return [MatrizLinha(ordemBloco=bloco["ordem"], descricao=" ".join(linhas_fonte), tipoTarefa="Informação")]
+    if categoria == "aviso_informativo" and linhas_fonte:
+        descricao = " ".join(linhas_fonte)
+        contexto_aviso = bloco.get("contextoTarefa") or {}
+        item_contexto = str(
+            contexto_aviso.get("tarefaLista")
+            or bloco.get("itemPadraoDetectado")
+            or bloco.get("secaoContextual")
+            or ""
+        )
+        linhas = [
+            MatrizLinha(
+                ordemBloco=bloco["ordem"],
+                itemPadrao=str(bloco.get("itemPadraoDetectado") or ""),
+                descricao=descricao,
+                tipoTarefa="Informação",
+            )
+        ]
+        sentencas = re.split(r"(?<=[.;!?])\s+(?=[A-ZÁÉÍÓÚ])", descricao)
+        for sentenca in sentencas[1:]:
+            if re.match(rf"^{_ACTION_VERB_RE}\b", sentenca, re.IGNORECASE):
+                linhas.extend(
+                    MatrizLinha(
+                        ordemBloco=bloco["ordem"],
+                        itemPadrao=item_contexto,
+                        descricao=sentenca,
+                        tipoTarefa="Execução",
+                        descricaoTarefa=acao,
+                    )
+                    for acao in _extrair_acoes_explicitas(sentenca)
+                )
+        return linhas
     contexto_lista = bloco.get("contextoTarefa") or {}
     if contexto_lista.get("nivelLista") in {"tarefa", "item_lista_verificacao"} and linhas_fonte:
         descricao = _texto_fonte_sem_item(bloco)
+        itens_lineares = _separar_itens_lineares([descricao])
+        if len(itens_lineares) > 1:
+            item_base = str(bloco.get("itemPadraoDetectado") or "")
+            tarefa_contextual = str(contexto_lista.get("tarefaLista") or "").rstrip(".")
+            linhas: list[MatrizLinha] = []
+            for marcador, descricao_item, texto_acao in itens_lineares:
+                item_linha = (
+                    f"{tarefa_contextual}.({marcador}.)"
+                    if tarefa_contextual and marcador
+                    else f"{item_base.rstrip('.')}.({marcador})"
+                    if item_base and marcador
+                    else item_base
+                )
+                corpo_acao = re.sub(r"^Fase de [^:]+:\s*", "", texto_acao, flags=re.IGNORECASE)
+                acoes = _extrair_acoes_explicitas(corpo_acao)
+                if len(acoes) > 1:
+                    acoes = [
+                        re.sub(r"\s+e,\s*após esse processo\.$", ".", acao, flags=re.IGNORECASE)
+                        for acao in acoes
+                    ]
+                for acao in acoes or [_normalizar_acao_para_infinitivo(texto_acao)]:
+                    linhas.append(
+                        MatrizLinha(
+                            ordemBloco=bloco["ordem"],
+                            itemPadrao=item_linha,
+                            descricao=descricao_item,
+                            tipoTarefa="Execução",
+                            descricaoTarefa=acao,
+                        )
+                    )
+            return linhas
         return [
             MatrizLinha(
                 ordemBloco=bloco["ordem"],
@@ -1425,6 +1593,7 @@ def _bloco_tem_contrato_deterministico(bloco: dict[str, Any]) -> bool:
             "atividade_tabela_2",
             "cabecalho_tabela",
             "objetivo",
+            "aviso_informativo",
             "aplicacao",
             "tabela_tecnica",
             "definicoes",
@@ -1813,6 +1982,7 @@ def converter_blocos_com_ia(
     )
 
     matriz = _preencher_item_padrao_detectado(blocos, matriz)
+    matriz = _preencher_executantes(blocos, matriz)
     _validar_cobertura_dos_blocos(blocos, matriz)
     return [
         linha.model_dump()

@@ -29,6 +29,7 @@ from app.services.llm_service import (
     _criar_linhas_de_fallback,
     _criar_prompt,
     _normalizar_ordens_da_resposta,
+    _preencher_executantes,
     _preencher_item_padrao_detectado,
     _remover_linhas_nao_fundamentadas,
     _matriz_de_conteudo_json,
@@ -41,6 +42,7 @@ from app.services.normalizer_service import normalizar_linhas
 from app.services.parser_rules_service import filtrar_regras_por_bloco, preparar_blocos_para_ia
 from app.services.pdf_service import (
     _serializar_tabela,
+    detectar_categoria,
     extrair_texto_e_imagens_pdf,
     limpar_texto_pdf,
     separar_blocos,
@@ -601,6 +603,7 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(blocos[0]["escopo"], "tabelas_tecnicas")
         self.assertEqual(item["escopo"], "documento_principal")
         self.assertIn("figura 5. Existe ainda", item["texto"])
+        self.assertEqual(item["texto"].count("Existe ainda"), 1)
         self.assertFalse(any(bloco["itemPadraoDetectado"] == "5." for bloco in blocos))
 
     def test_image_after_reference_table_remains_an_image_block(self):
@@ -1156,6 +1159,118 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertIn("[[IMAGEM_PDF:1]]", texto)
         self.assertNotIn("CPROP", texto)
 
+    def test_operational_pdf_table_keeps_task_metadata_with_embedded_image(self):
+        documento = fitz.open()
+        pagina = documento.new_page(width=520, height=220)
+        pagina.insert_text((20, 25), "3.2. Lista de tarefas", fontsize=8)
+        colunas = [20, 290, 410, 500]
+        linhas = [40, 80, 130]
+        for coluna in colunas:
+            pagina.draw_line((coluna, linhas[0]), (coluna, linhas[-1]), color=(0, 0, 0))
+        for linha in linhas:
+            pagina.draw_line((colunas[0], linha), (colunas[-1], linha), color=(0, 0, 0))
+        valores = [
+            ["O QUE FAZER", "EXECUTANTE", "ONDE REGISTRAR"],
+            ["3.2.1. Receber PIG do oleoduto", "Equipe de operação", "APLAT"],
+        ]
+        for indice_linha, valores_linha in enumerate(valores):
+            for indice_coluna, valor in enumerate(valores_linha):
+                pagina.insert_textbox(
+                    fitz.Rect(
+                        colunas[indice_coluna] + 2,
+                        linhas[indice_linha] + 2,
+                        colunas[indice_coluna + 1] - 2,
+                        linhas[indice_linha + 1] - 2,
+                    ),
+                    valor,
+                    fontsize=7,
+                )
+
+        texto, imagens = extrair_texto_e_imagens_pdf(documento.tobytes())
+        documento.close()
+        blocos = separar_blocos(limpar_texto_pdf(texto))
+        linhas_fallback = [
+            linha
+            for bloco in blocos
+            if bloco["categoria"] != "imagem"
+            for linha in _criar_linhas_de_fallback(bloco)
+        ]
+        matriz = _preencher_executantes(blocos, MatrizOutput(linhas=linhas_fallback))
+        execucao = next(linha for linha in matriz.linhas if linha.tipoTarefa == "Execução")
+
+        self.assertEqual(len(imagens), 1)
+        self.assertIn("3.2.1. Receber PIG", texto)
+        self.assertEqual(execucao.executante, "Equipe de operação")
+        self.assertNotIn("EXECUTANTE_TABELA", imagens[0]["textoAlternativo"])
+
+    def test_numbered_notice_stays_informative_and_detaches_direct_action(self):
+        blocos = separar_blocos(
+            "3.2.3. Testar tanque\n"
+            "NOTA 1: Todo vazamento deverá ser comunicado ao coordenador.\n"
+            "Observação 4: O tanque possui serpentina. Certificar-se que o tanque esteja vazio."
+        )
+        linhas = [linha for bloco in blocos for linha in _criar_linhas_de_fallback(bloco)]
+
+        nota = next(linha for linha in linhas if linha.descricao.startswith("NOTA 1"))
+        certificar = next(linha for linha in linhas if linha.descricaoTarefa.startswith("Certificar-se"))
+        self.assertEqual(nota.tipoTarefa, "Informação")
+        self.assertEqual(certificar.tipoTarefa, "Execução")
+
+    def test_wrapped_equipment_identifier_does_not_create_numbered_title(self):
+        texto = limpar_texto_pdf(
+            "3.2.3. Testar os tanques TQ-3171.03014 e TQ-\n"
+            "3171.03017 durante a operação."
+        )
+        blocos = separar_blocos(texto)
+
+        self.assertIn("TQ-3171.03017", texto)
+        self.assertFalse(any(bloco["texto"].startswith("3171.03017") for bloco in blocos))
+
+    def test_nested_lettered_checklist_actions_are_split(self):
+        blocos = separar_blocos(
+            "3.2. Lista de tarefas\n"
+            "3.2.1. Testar o tanque\n"
+            "Lista de verificação:\n"
+            "1. Realizar quatro fases; a. Alinhar o fluxo; b. Aguardar estabilização; "
+            "c. Medir o nível; d. Coletar amostras."
+        )
+        linhas = [linha for bloco in blocos for linha in _criar_linhas_de_fallback(bloco)]
+        descricoes = [linha.descricaoTarefa for linha in linhas if linha.tipoTarefa == "Execução"]
+
+        self.assertTrue(any(descricao.startswith("Alinhar") for descricao in descricoes))
+        self.assertTrue(any(descricao.startswith("Coletar") for descricao in descricoes))
+        self.assertGreaterEqual(len(descricoes), 5)
+
+    def test_checklist_phase_keeps_drain_and_sample_actions(self):
+        blocos = separar_blocos(
+            "3.2. Lista de tarefas\n"
+            "3.2.3. Testar o tanque\n"
+            "Lista de verificação:\n"
+            "3. Realizar o teste; d. Fase de coleta de amostras: drena-se a água livre "
+            "do tanque e, após esse processo, coleta-se, de preferência, 03 amostras "
+            "de petróleo para determinação do BSW emulsionado."
+        )
+        tarefas = [
+            linha.descricaoTarefa
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+            if linha.tipoTarefa == "Execução"
+        ]
+
+        self.assertTrue(any(tarefa.startswith("Drenar a água livre") for tarefa in tarefas))
+        self.assertTrue(any(tarefa.startswith("Coletar, de preferência, 03 amostras") for tarefa in tarefas))
+        self.assertFalse(any(tarefa.endswith("e, após esse processo.") for tarefa in tarefas))
+        self.assertFalse(any(tarefa.startswith("Coletar de amostras") for tarefa in tarefas))
+
+    def test_automatic_equipment_description_is_not_human_execution(self):
+        blocos = separar_blocos(
+            "3.3.2.2.5. Os tanques possuem dois sensores. "
+            "Existe ainda um monitor de discrepância que monitora os sensores e alerta o operador."
+        )
+        linhas = [linha for bloco in blocos for linha in _criar_linhas_de_fallback(bloco)]
+
+        self.assertTrue(all(linha.tipoTarefa == "Informação" for linha in linhas))
+
     def test_technical_pdf_table_can_be_extracted_as_structured_text(self):
         documento = fitz.open()
         pagina = documento.new_page(width=420, height=220)
@@ -1295,7 +1410,7 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(blocos[2]["itemPadraoDetectado"], "3.3.1.b.")
         self.assertEqual(blocos[1]["categoria"], "instrucao_operacional")
         self.assertEqual(blocos[2]["categoria"], "geral")
-        self.assertEqual(blocos[3]["categoria"], "geral")
+        self.assertEqual(blocos[3]["categoria"], "aviso_informativo")
 
     def test_present_tense_and_coordinated_actions_are_extracted_separately(self):
         blocos = separar_blocos(
@@ -1321,6 +1436,66 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertTrue(execucoes["3.3.2.i."][0].startswith("Lacrar o tambor"))
         self.assertTrue(execucoes["3.3.2.i."][1].startswith("Etiquetar o tambor"))
         self.assertTrue(execucoes["3.3.2.i."][2].startswith("Avisar a equipe"))
+
+    def test_feedback_sample_recognizes_passives_and_keeps_visual_labels_informative(self):
+        blocos = separar_blocos(
+            "3.3.1. Operação\n"
+            "a) A bomba deve ser parada após a normalização do nível;\n"
+            "b) A bomba reserva pode ser acionada através do alinhamento da válvula;\n"
+            "NOTA: O operador poderá alinhar as bombas em conjunto.\n"
+            "Tela 03: Esgotamento Casa de Bombas - Parte Inferior da tela."
+        )
+        self.assertEqual(
+            detectar_categoria("NOTA: O operador poderá alinhar as bombas em conjunto."),
+            "aviso_informativo",
+        )
+        self.assertEqual(
+            detectar_categoria("Tela 03: Esgotamento Casa de Bombas - Parte Inferior da tela."),
+            "legenda_figura",
+        )
+        tarefas = [
+            linha.descricaoTarefa
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+            if linha.tipoTarefa == "Execução"
+        ]
+        self.assertTrue(any(tarefa.startswith("Parar a bomba") for tarefa in tarefas))
+        self.assertTrue(any(tarefa.startswith("Acionar a bomba reserva") for tarefa in tarefas))
+
+    def test_feedback_sample_removes_discourse_marker_and_reflexive_false_condition(self):
+        blocos = separar_blocos(
+            "3.3.2. Cenário\n"
+            "a) O Operador de Embarcação Controle deve então solicitar à equipe de embarcação o deslocamento;\n"
+            "b) O Operador de Embarcação Controle deve se certificar que a válvula está fechada."
+        )[1:]
+        tarefas = [
+            linha.descricaoTarefa
+            for bloco in blocos
+            for linha in _criar_linhas_de_fallback(bloco)
+            if linha.tipoTarefa == "Execução"
+        ]
+
+        self.assertTrue(any(tarefa.startswith("Solicitar à equipe") for tarefa in tarefas))
+        self.assertTrue(any(tarefa.startswith("Certificar-se") for tarefa in tarefas))
+        self.assertTrue(all(not tarefa.startswith("Então") and not tarefa.endswith(", se.") for tarefa in tarefas))
+
+    def test_feedback_sample_assigns_only_explicit_executors(self):
+        blocos = separar_blocos(
+            "3.3.2. Cenário\n"
+            "a) O Operador de Embarcação Controle deve pedir apoio do Técnico de Segurança, para fazer a monitoração do ambiente;\n"
+            "b) O Operador de Embarcação Controle deve solicitar à equipe de embarcação o deslocamento e avaliar de forma segura a origem do alagamento."
+        )[1:]
+        linhas = converter_blocos_com_ia(blocos, [], [], {"filename": "teste.pdf"})
+        por_tarefa = {linha["descricaoTarefa"]: linha["executante"] for linha in linhas}
+
+        self.assertEqual(
+            next(valor for tarefa, valor in por_tarefa.items() if tarefa.startswith("Fazer a monitoração")),
+            "Técnico de Segurança do Trabalho",
+        )
+        self.assertEqual(
+            next(valor for tarefa, valor in por_tarefa.items() if tarefa.startswith("Avaliar de forma segura")),
+            "Equipe de Embarcação",
+        )
 
     def test_conditions_are_applied_to_each_dependent_action(self):
         blocos = separar_blocos(
@@ -1628,7 +1803,15 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(rows[1]["Descrição"], "Executar\natividade")
         self.assertEqual(
             CSV_COLUMNS,
-            ("Item (Padrão)", "Descrição", "Tipo da Tarefa", "ID da Subtarefa", "Subtarefa (HTA)", "Descrição da tarefa"),
+            (
+                "Item (Padrão)",
+                "Descrição",
+                "Tipo da Tarefa",
+                "ID da Subtarefa",
+                "Subtarefa (HTA)",
+                "Descrição da tarefa",
+                "Executante",
+            ),
         )
 
     def test_rules_prioritize_matching_scope_and_category(self):
@@ -1782,6 +1965,7 @@ class MatrizServicesTest(unittest.TestCase):
                 "Tipo da tarefa",
                 "ID da Subtarefa",
                 "Descrição da tarefa (HTA)",
+                "Executante",
             ),
         )
 
