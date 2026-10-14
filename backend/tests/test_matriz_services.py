@@ -1839,6 +1839,32 @@ class MatrizServicesTest(unittest.TestCase):
 
         self.assertEqual([regra["id"] for regra in selecionadas], [2, 1])
 
+    def test_newest_rule_wins_conflict_in_same_scope_and_category(self):
+        regras = [
+            {
+                "id": "antiga",
+                "escopo": "geral",
+                "categoria": "instrucao_operacional",
+                "ordem": 10,
+                "updated_at": "2026-08-12T10:00:00+00:00",
+            },
+            {
+                "id": "recente",
+                "escopo": "geral",
+                "categoria": "instrucao_operacional",
+                "ordem": 20,
+                "updated_at": "2026-09-21T10:00:00+00:00",
+            },
+        ]
+
+        selecionadas = filtrar_regras_por_bloco(
+            regras,
+            "documento_principal",
+            "instrucao_operacional",
+        )
+
+        self.assertEqual([regra["id"] for regra in selecionadas], ["recente", "antiga"])
+
     def test_doc_extension_accepts_docx_package_from_reference_files(self):
         documento = Document()
         documento.add_paragraph("1. OBJETIVO")

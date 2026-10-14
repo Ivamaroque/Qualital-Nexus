@@ -7,7 +7,7 @@ from app.core.supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
-_RULE_FIELDS = "id,nome,descricao,ordem,escopo,padrao_regex,tipo_tarefa,categoria,exemplo_entrada,exemplo_saida_json"
+_RULE_FIELDS = "id,nome,descricao,ordem,escopo,padrao_regex,tipo_tarefa,categoria,exemplo_entrada,exemplo_saida_json,updated_at"
 _MAX_RULE_TEXT_LENGTH = 12_000
 _CATEGORY_ALIASES = {
     "aviso_informativo": {"observacao"},
@@ -62,10 +62,12 @@ def filtrar_regras_por_bloco(regras: list[dict[str, Any]], escopo: str, categori
             return 1
         return 2
 
-    return sorted(
-        compativeis,
-        key=lambda regra: (prioridade_categoria(regra), regra.get("ordem") or 0),
-    )
+    # Ordenações estáveis: categoria exata vence; em conflito, a regra mais
+    # recente vence; ``ordem`` permanece como desempate editorial.
+    compativeis.sort(key=lambda regra: regra.get("ordem") or 0)
+    compativeis.sort(key=lambda regra: str(regra.get("updated_at") or ""), reverse=True)
+    compativeis.sort(key=prioridade_categoria)
+    return compativeis
 
 
 def preparar_blocos_para_ia(blocos: list[dict[str, Any]], regras: list[dict[str, Any]]) -> list[dict[str, Any]]:

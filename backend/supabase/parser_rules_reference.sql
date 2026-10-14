@@ -1,6 +1,6 @@
 -- Regras base observadas nos documentos de referência Petro-HRA.
--- Execute este arquivo no SQL Editor do projeto Supabase depois de criar
--- a tabela parser_rules usada pelo backend.
+-- Este arquivo serve como carga inicial e manutenção idempotente. Consulte
+-- README.md antes de criar ou alterar regras no projeto Supabase.
 
 WITH regras (nome, descricao, ordem, escopo, padrao_regex, tipo_tarefa, categoria, exemplo_entrada, exemplo_saida_json) AS (
     VALUES
@@ -230,3 +230,61 @@ SET descricao = 'Mantém legendas de telas e fluxogramas como Informação, sem 
     categoria = 'legenda_figura',
     ativo = true
 WHERE nome = 'Legenda de tela operacional';
+
+-- Metadados de manutenção: preservam o contrato consumido pelo backend e
+-- explicam os campos diretamente no catálogo do Postgres/Supabase Studio.
+COMMENT ON TABLE public.parser_rules IS
+    'Regras do parser. Seleção: regex correspondente ou fallback por categoria; depois categoria exata, updated_at recente e ordem crescente.';
+COMMENT ON COLUMN public.parser_rules.nome IS
+    'Nome humano e único da regra.';
+COMMENT ON COLUMN public.parser_rules.descricao IS
+    'Explica quando aplicar a regra e o resultado esperado.';
+COMMENT ON COLUMN public.parser_rules.ativo IS
+    'Somente regras ativas são carregadas pelo backend.';
+COMMENT ON COLUMN public.parser_rules.ordem IS
+    'Desempate editorial após categoria e updated_at; menor valor vence.';
+COMMENT ON COLUMN public.parser_rules.escopo IS
+    'Região do documento onde a regra pode atuar.';
+COMMENT ON COLUMN public.parser_rules.padrao_regex IS
+    'Regex compatível com Python; vazio indica aplicação somente pela categoria.';
+COMMENT ON COLUMN public.parser_rules.tipo_tarefa IS
+    'Classificação final permitida para a linha da matriz.';
+COMMENT ON COLUMN public.parser_rules.categoria IS
+    'Categoria produzida pelo parser local e usada para compatibilidade.';
+COMMENT ON COLUMN public.parser_rules.exemplo_entrada IS
+    'Trecho mínimo que demonstra a aplicação da regra.';
+COMMENT ON COLUMN public.parser_rules.exemplo_saida_json IS
+    'Saída esperada usada como exemplo para o LLM e para validação.';
+COMMENT ON COLUMN public.parser_rules.updated_at IS
+    'Data da versão efetiva; a regra mais recente vence conflitos compatíveis.';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_parser_rules_nome_ci
+    ON public.parser_rules (lower(nome));
+
+ALTER FUNCTION public.set_updated_at() SET search_path = '';
+
+DROP TRIGGER IF EXISTS parser_rules_set_updated_at ON public.parser_rules;
+DROP TRIGGER IF EXISTS trg_parser_rules_updated_at ON public.parser_rules;
+CREATE TRIGGER trg_parser_rules_updated_at
+BEFORE UPDATE ON public.parser_rules
+FOR EACH ROW
+WHEN (OLD IS DISTINCT FROM NEW)
+EXECUTE FUNCTION public.set_updated_at();
+
+-- Estas regras já são selecionadas por categoria. As regex anteriores usavam
+-- lookbehind de largura variável, que não é aceito pelo runtime Python.
+UPDATE public.parser_rules
+SET padrao_regex = '',
+    descricao = CASE nome
+        WHEN 'Texto de objetivo' THEN 'Conteúdo da categoria objetivo. Aplicação pela categoria, sem regex.'
+        WHEN 'Texto de aplicação' THEN 'Conteúdo da categoria aplicação. Aplicação pela categoria, sem regex.'
+        WHEN 'Itens críticos' THEN 'Conteúdo da categoria itens_criticos. Aplicação pela categoria, sem regex.'
+    END
+WHERE nome IN ('Texto de objetivo', 'Texto de aplicação', 'Itens críticos');
+
+-- Regra antiga coberta pela versão alfanumérica mais recente. É mantida
+-- inativa para histórico e possível reversão.
+UPDATE public.parser_rules
+SET ativo = false,
+    descricao = 'Substituída por Anexo alfanumérico em arquivo próprio.'
+WHERE nome = 'Cabeçalho de anexo';

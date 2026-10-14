@@ -16,6 +16,8 @@ FRONTEND_ORIGIN=http://localhost:3000
 
 `SUPABASE_SERVICE_ROLE_KEY` é exclusiva do backend e nunca deve ser colocada em variáveis `NEXT_PUBLIC_*` nem versionada. Sem Supabase, a API funciona sem regras e exemplos remotos; sem a chave do OpenRouter, use `LLM_PROVIDER=ollama` no desenvolvimento ou a conversão retornará um erro claro.
 
+Para criar, revisar ou substituir regras, consulte [supabase/README.md](supabase/README.md), que documenta campos, precedência e auditoria da tabela `parser_rules`.
+
 ## Executar localmente
 
 ```powershell
