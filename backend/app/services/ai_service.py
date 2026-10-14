@@ -1,6 +1,5 @@
 import json
 import logging
-from typing import Any
 
 import httpx
 
@@ -10,7 +9,7 @@ from app.models.schemas import BlockType, ParsedBlock
 logger = logging.getLogger(__name__)
 
 
-async def normalize_complex_blocks(blocks: list[ParsedBlock], examples: list[dict[str, Any]], settings: Settings) -> list[ParsedBlock]:
+async def normalize_complex_blocks(blocks: list[ParsedBlock], settings: Settings) -> list[ParsedBlock]:
     """Normaliza somente blocos explicitamente marcados como ambíguos pelo parser.
 
     Sem chave do OpenRouter, ou em falhas externas, preserva exatamente o resultado
@@ -25,7 +24,6 @@ async def normalize_complex_blocks(blocks: list[ParsedBlock], examples: list[dic
 
     prompt = {
         "task": "Classifique cada bloco como Título, Subtítulo, Execução ou Informação. Não invente conteúdo.",
-        "examples": examples,
         "blocks": [{"index": index, "content": block.content, "current_type": block.block_type.value} for index, block in enumerate(targets)],
     }
     try:

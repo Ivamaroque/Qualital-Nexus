@@ -22,8 +22,6 @@ class Settings(BaseSettings):
     supabase_url: str | None = None
     supabase_service_role_key: str | None = None
     supabase_anon_key: str | None = None
-    rag_examples_table: str = "rag_examples"
-    rag_examples_limit: int = 5
 
     openrouter_api_key: str | None = None
     openrouter_model: str = "openai/gpt-5-nano"

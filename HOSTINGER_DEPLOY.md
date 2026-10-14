@@ -1,5 +1,7 @@
 # Deploy da API na VPS Hostinger
 
+> Este ambiente usa o Traefik já existente. Para comparar com o modo alternativo que sobe Caddy, consulte [docs/deployment.md](docs/deployment.md).
+
 Este arquivo de deploy publica somente a API FastAPI do Qualital Nexus. Ele usa o Traefik já instalado com o n8n para disponibilizar HTTPS e não altera os containers nem os fluxos do n8n.
 
 ## Pré-requisitos

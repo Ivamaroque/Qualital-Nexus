@@ -33,7 +33,7 @@ function DashboardContent() {
         <section className="dashboard-next">
           <p className="dashboard-eyebrow">Próximos módulos</p>
           <p>
-            A arquitetura já está pronta para receber backend FastAPI, histórico de extrações, RAG operacional e mais
+            A arquitetura já está pronta para receber histórico de extrações e mais
             ferramentas no frontend sem depender de banco para a lista inicial.
           </p>
           <div>
