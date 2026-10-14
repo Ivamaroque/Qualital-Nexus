@@ -5,13 +5,11 @@ import struct
 import sys
 import unittest
 import zipfile
-from asyncio import run
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import fitz
 from docx import Document
-from starlette.datastructures import UploadFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -54,13 +52,34 @@ from app.services.processing_status import (
     iniciar_processamento,
     obter_processamento,
 )
-from app.routers.extracao_pdf import (
+from app.services.extraction_pipeline_service import (
     _agrupar_blocos,
     _exemplos_parser_do_lote,
-    _mensagem_progresso_ollama,
+    _mensagem_progresso_ia,
     _proxima_raiz_hta,
-    _processar_arquivos,
+    processar_arquivos,
 )
+
+
+async def _executar_direto(funcao, *args):
+    return funcao(*args)
+
+
+class ArquivoUploadFalso:
+    def __init__(self, filename: str, conteudo: bytes):
+        self.filename = filename
+        self._conteudo = conteudo
+
+    async def read(self) -> bytes:
+        return self._conteudo
+
+
+def _resolver_corrotina(corrotina):
+    try:
+        corrotina.send(None)
+    except StopIteration as resultado:
+        return resultado.value
+    raise AssertionError("O teste unitário não deveria iniciar uma operação assíncrona externa.")
 
 
 class MatrizServicesTest(unittest.TestCase):
@@ -146,22 +165,28 @@ class MatrizServicesTest(unittest.TestCase):
             }
             for ordem in range(1, 10)
         ]
-        arquivo = UploadFile(filename="teste.pdf", file=io.BytesIO(b"%PDF-1.4 teste"))
+        arquivo = ArquivoUploadFalso("teste.pdf", b"%PDF-1.4 teste")
 
         with (
-            patch("app.routers.extracao_pdf.extrair_conteudo_documento", return_value=("texto", [])),
-            patch("app.routers.extracao_pdf.limpar_texto_pdf", return_value="texto"),
-            patch("app.routers.extracao_pdf.separar_blocos", return_value=blocos),
-            patch("app.routers.extracao_pdf.buscar_parser_rules", return_value=[]),
-            patch(
-                "app.routers.extracao_pdf.converter_blocos_com_ia",
+            patch("app.services.extraction_pipeline_service.extrair_conteudo_documento", return_value=("texto", [])),
+            patch("app.services.extraction_pipeline_service.limpar_texto_pdf", return_value="texto"),
+            patch("app.services.extraction_pipeline_service.separar_blocos", return_value=blocos),
+            patch("app.services.extraction_pipeline_service.run_in_threadpool", side_effect=_executar_direto),
+        ):
+            conversor = Mock(
                 side_effect=[
                     LLMConversionError("resposta inválida"),
                     [{"descricao": "Bloco 9", "tipoTarefa": "Informação"}],
-                ],
-            ),
-        ):
-            linhas, debug = run(_processar_arquivos([arquivo], incluir_debug=False))
+                ]
+            )
+            linhas, debug = _resolver_corrotina(
+                processar_arquivos(
+                    [arquivo],
+                    incluir_debug=False,
+                    buscar_regras=lambda: [],
+                    converter_blocos=conversor,
+                )
+            )
 
         self.assertEqual([linha["descricao"] for linha in linhas], ["Bloco 9"])
         self.assertEqual(debug["falhas_lotes"][0]["ordens_blocos"], list(range(1, 9)))
@@ -177,35 +202,33 @@ class MatrizServicesTest(unittest.TestCase):
             }
         ]
         assinatura_doc = bytes.fromhex("D0CF11E0A1B11AE1")
-        arquivo = UploadFile(filename="anexo.doc", file=io.BytesIO(assinatura_doc + b"content"))
+        arquivo = ArquivoUploadFalso("anexo.doc", assinatura_doc + b"content")
 
         with (
             patch(
-                "app.routers.extracao_pdf.extrair_conteudo_documento",
+                "app.services.extraction_pipeline_service.extrair_conteudo_documento",
                 return_value=("1. OBJETIVO", []),
             ) as extrator,
-            patch("app.routers.extracao_pdf.limpar_texto_pdf", return_value="1. OBJETIVO"),
-            patch("app.routers.extracao_pdf.separar_blocos", return_value=blocos),
-            patch("app.routers.extracao_pdf.buscar_parser_rules", return_value=[]),
-            patch(
-                "app.routers.extracao_pdf.converter_blocos_com_ia",
-                return_value=[
-                    {
-                        "ordemBloco": 1,
-                        "itemPadrao": "1.",
-                        "descricao": "OBJETIVO",
-                        "tipoTarefa": "Título/Subtítulo",
-                        "subtarefaHTA": "",
-                        "descricaoTarefa": "",
-                    }
-                ],
-            ),
+            patch("app.services.extraction_pipeline_service.limpar_texto_pdf", return_value="1. OBJETIVO"),
+            patch("app.services.extraction_pipeline_service.separar_blocos", return_value=blocos),
+            patch("app.services.extraction_pipeline_service.run_in_threadpool", side_effect=_executar_direto),
         ):
-            linhas, _debug = run(
-                _processar_arquivos(
+            linhas, _debug = _resolver_corrotina(
+                processar_arquivos(
                     [arquivo],
                     incluir_debug=False,
                     modo_tabelas="texto",
+                    buscar_regras=lambda: [],
+                    converter_blocos=lambda *_args: [
+                        {
+                            "ordemBloco": 1,
+                            "itemPadrao": "1.",
+                            "descricao": "OBJETIVO",
+                            "tipoTarefa": "Título/Subtítulo",
+                            "subtarefaHTA": "",
+                            "descricaoTarefa": "",
+                        }
+                    ],
                 )
             )
 
@@ -418,9 +441,9 @@ class MatrizServicesTest(unittest.TestCase):
         self.assertEqual(linhas[0]["descricao"], "- Requisito técnico")
 
     def test_ollama_progress_message_covers_retry_state_and_unknown_states(self):
-        self.assertIn("omitiu blocos", _mensagem_progresso_ollama("corrigindo_cobertura"))
+        self.assertIn("omitiu blocos", _mensagem_progresso_ia("corrigindo_cobertura"))
         self.assertEqual(
-            _mensagem_progresso_ollama("estado_novo"),
+            _mensagem_progresso_ia("estado_novo"),
             "A IA está atualizando o processamento do lote.",
         )
 

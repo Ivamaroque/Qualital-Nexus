@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     supabase_url: str | None = None
     supabase_service_role_key: str | None = None
     supabase_anon_key: str | None = None
+    auth_required: bool = True
 
     openrouter_api_key: str | None = None
     openrouter_model: str = "openai/gpt-5-nano"
@@ -53,6 +54,10 @@ class Settings(BaseSettings):
     @property
     def supabase_is_configured(self) -> bool:
         return bool(self.supabase_url and self.supabase_service_role_key)
+
+    @property
+    def supabase_auth_is_configured(self) -> bool:
+        return bool(self.supabase_url and self.supabase_anon_key)
 
 
 @lru_cache

@@ -2,7 +2,7 @@
 
 Base local: `http://localhost:8000`.
 
-> A função de validação de JWT ainda não está conectada às rotas. Os exemplos enviam Bearer porque esse é o contrato pretendido pelo frontend, mas a proteção precisa ser concluída no backend.
+As rotas de extração validam o Bearer token no Supabase Auth. Apenas o endpoint de saúde é público. No desenvolvimento sem Supabase, defina `AUTH_REQUIRED=false` explicitamente.
 
 ## `GET /health`
 
@@ -27,8 +27,10 @@ Processa um ou mais documentos e devolve um arquivo.
 
 | Header | Obrigatório | Uso |
 |---|---:|---|
-| `Authorization: Bearer <JWT>` | Pretendido | Sessão do Supabase; ainda não validada pelas rotas atuais. |
+| `Authorization: Bearer <JWT>` | Sim¹ | Sessão validada no Supabase Auth. |
 | `X-Processing-Id` | Não | Identificador de 8 a 100 caracteres alfanuméricos, `_` ou `-`, usado para polling. |
+
+¹ Dispensado somente no modo local explicitamente configurado com `AUTH_REQUIRED=false` e sem credenciais de Auth.
 
 ### Corpo
 
@@ -106,8 +108,8 @@ Use apenas para diagnóstico: a resposta pode ser grande e conter conteúdo dos 
 |---:|---|
 | 400 | Nenhum arquivo, limite excedido, extensão inválida, arquivo vazio/corrompido ou nenhum bloco identificado. |
 | 404 | Status inexistente ou expirado. |
-| 401 | Previsto quando a validação Bearer for conectada. |
-| 503 | Previsto para indisponibilidade da autenticação ou configuração obrigatória ausente. |
+| 401 | Bearer ausente, inválido ou expirado. |
+| 503 | Supabase Auth indisponível ou configuração obrigatória ausente. |
 | 500 | Falha interna não convertida em erro de domínio. |
 
 O detalhe de erros HTTP é retornado em JSON no campo `detail`.

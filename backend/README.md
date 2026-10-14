@@ -14,6 +14,7 @@ OPENROUTER_MODEL=openai/gpt-5-nano
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_ANON_KEY=
+AUTH_REQUIRED=false
 FRONTEND_ORIGIN=http://localhost:3000
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434/v1
@@ -48,7 +49,7 @@ Para o frontend, defina `NEXT_PUBLIC_API_URL=http://localhost:8000`. O cliente e
 
 Os endpoints de processamento aceitam `table_mode=imagem|texto` e um ou mais arquivos PDF, DOC ou DOCX, até 20 arquivos de 25 MB por padrão. PDFs sem camada de texto ainda não têm OCR.
 
-O frontend envia o JWT do Supabase, mas a dependência de autenticação ainda não está conectada às rotas FastAPI. Consulte [../docs/backend.md](../docs/backend.md#autenticação-da-api) antes de expor a API publicamente.
+O frontend envia o JWT do Supabase e todas as rotas de extração validam esse token. `AUTH_REQUIRED` é `true` por padrão; use `false` somente no desenvolvimento local sem Supabase.
 
 ## Testes
 

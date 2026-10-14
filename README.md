@@ -83,6 +83,6 @@ O frontend ainda não possui scripts de lint ou testes automatizados. Consulte a
 
 - Nunca coloque `SUPABASE_SERVICE_ROLE_KEY`, chaves secretas do Supabase ou `OPENROUTER_API_KEY` em variáveis `NEXT_PUBLIC_*`.
 - Arquivos `.env` não devem ser versionados.
-- O frontend exige sessão para abrir as telas internas, mas a validação do Bearer token nas rotas FastAPI ainda não está conectada. Trate essa pendência antes de expor a API publicamente; consulte [docs/backend.md](docs/backend.md#autenticação-da-api).
+- O frontend exige sessão nas telas internas e as rotas FastAPI validam o Bearer token no Supabase. `AUTH_REQUIRED` é `true` por padrão; consulte [docs/backend.md](docs/backend.md#autenticação-da-api).
 
 

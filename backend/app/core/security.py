@@ -19,7 +19,7 @@ async def require_authenticated_user(request: Request) -> dict | None:
     settings: Settings = get_settings()
     authorization = request.headers.get("Authorization", "")
 
-    if not settings.supabase_is_configured:
+    if not settings.supabase_auth_is_configured:
         if settings.auth_required:
             logger.error("AUTH_REQUIRED=true sem credenciais do Supabase configuradas")
             raise HTTPException(

@@ -29,6 +29,7 @@ uvicorn app.main:app --reload --port 8000
 | `SUPABASE_URL` | vazio | URL do projeto. |
 | `SUPABASE_SERVICE_ROLE_KEY` | vazio | Chave privilegiada usada somente pelo backend. |
 | `SUPABASE_ANON_KEY` | vazio | Chave pública usada pela função de validação de sessão. |
+| `AUTH_REQUIRED` | `true` | Exige configuração de Auth; use `false` somente no desenvolvimento local sem Supabase. |
 | `LLM_PROVIDER` | `ollama` | `ollama` ou `openrouter`. |
 | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Endpoint compatível com OpenAI. |
 | `OLLAMA_MODEL` | `qwen3:8b` | Modelo local. |
@@ -47,15 +48,16 @@ As configurações são lidas primeiro de `backend/.env` e também podem vir do 
 
 O fluxo chamado por `/api/extracao-pdf/process` é:
 
-1. `routers/extracao_pdf.py`: valida multipart, quantidade, tamanho e orquestra o pedido.
-2. `document_service.py`: identifica PDF/DOC/DOCX e extrai conteúdo.
-3. `pdf_service.py`: limpa texto, detecta tabelas/imagens, separa blocos, categorias e escopos.
-4. `parser_rules_service.py`: carrega regras ativas do Supabase e escolhe regras compatíveis.
-5. `llm_service.py`: monta o prompt, chama Ollama/OpenRouter, valida cobertura e aplica fallbacks.
-6. `matrix_structure_service.py`: consolida a hierarquia das tarefas e anexos.
-7. `normalizer_service.py`: normaliza as colunas finais.
-8. `xlsx_service.py` ou `csv_service.py`: gera o arquivo retornado.
-9. `processing_status.py`: mantém o progresso em memória por até uma hora.
+1. `routers/extracao_pdf.py`: valida HTTP, aplica autenticação e produz a resposta.
+2. `extraction_pipeline_service.py`: orquestra o caso de uso e recebe o repositório de regras e o conversor LLM por contrato.
+3. `document_service.py`: identifica PDF/DOC/DOCX e extrai conteúdo.
+4. `pdf_service.py`: limpa texto, detecta tabelas/imagens, separa blocos, categorias e escopos.
+5. `parser_rules_service.py`: carrega regras ativas do Supabase e escolhe regras compatíveis.
+6. `llm_service.py`: monta o prompt, chama Ollama/OpenRouter, valida cobertura e aplica fallbacks.
+7. `matrix_structure_service.py`: consolida a hierarquia das tarefas e anexos.
+8. `normalizer_service.py`: normaliza as colunas finais.
+9. `xlsx_service.py` ou `csv_service.py`: gera o arquivo retornado.
+10. `processing_status.py`: mantém o progresso em memória por até uma hora.
 
 As imagens não são enviadas como blocos textuais ao LLM. Quando preservadas, tornam-se linhas informativas incorporadas no XLSX.
 
@@ -73,14 +75,7 @@ O cliente deve conferir `X-Extraction-Partial` e `X-Extraction-Failures`.
 
 ## Autenticação da API
 
-Estado atual:
-
-- o frontend envia o JWT do Supabase no header Bearer;
-- `app/core/security.py` possui `require_authenticated_user`;
-- as rotas de `extracao_pdf.py` não declaram essa função como dependência;
-- a função consulta `settings.auth_required`, mas `Settings` ainda não declara esse campo.
-
-Consequentemente, a API não deve ser descrita nem tratada como protegida pelo JWT neste estado. Antes da exposição pública, conecte a dependência às rotas, defina o comportamento local/produção, adicione testes 401/503 e só então atualize esta seção.
+Todas as rotas de extração aplicam `require_authenticated_user`. Com `SUPABASE_URL` e `SUPABASE_ANON_KEY`, o Bearer token é obrigatório e validado no endpoint oficial de Auth. Sem essas credenciais, o acesso local só é permitido quando `AUTH_REQUIRED=false`; em produção, configure `AUTH_REQUIRED=true` para falhar com 503 em vez de iniciar sem proteção.
 
 ## CORS
 
@@ -94,13 +89,11 @@ cd backend
 .venv\Scripts\python.exe -m unittest discover -s tests -q
 ```
 
-Para executar apenas os testes das regras do parser:
+Para executar apenas os testes de autenticação:
 
 ```powershell
-.venv\Scripts\python.exe -m unittest tests.test_parser_rules -q
+.venv\Scripts\python.exe -m unittest tests.test_security -q
 ```
-
-Alguns testes antigos cobrem o pipeline legado, e não apenas o router ativo. Ao alterar o parser, confirme em qual caminho a função é realmente importada.
 
 ## Observabilidade
 

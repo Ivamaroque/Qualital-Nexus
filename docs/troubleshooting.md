@@ -28,7 +28,7 @@ Depois de alterar, reinicie a API.
 
 ## Login funciona, mas a API aceita chamadas sem sessão
 
-Esse é um débito conhecido: o frontend envia Bearer, porém o backend ainda não conecta `require_authenticated_user` às rotas. Não tente corrigir apenas pela interface ou por CORS; autenticação precisa ser aplicada no servidor e coberta por testes.
+Confirme `SUPABASE_URL`, `SUPABASE_ANON_KEY` e o Bearer enviado pelo frontend. Se `AUTH_REQUIRED=true` e as credenciais estiverem ausentes, a API responde 503; token ausente, inválido ou expirado responde 401.
 
 ## Perfil não carrega
 

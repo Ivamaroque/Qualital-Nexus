@@ -7,8 +7,9 @@ flowchart LR
     U[Usuário] --> F[Next.js]
     F -->|login e perfil| S[Supabase Auth/Postgres]
     F -->|multipart + JWT| A[FastAPI]
-    A -->|regras do parser| S
-    A --> E[Extração PDF/Word]
+    A --> O[Serviço de aplicação]
+    O -->|regras do parser| S
+    O --> E[Extração PDF/Word]
     E --> P[Parser local]
     P --> L[Ollama ou OpenRouter]
     L --> N[Normalização e hierarquia]
@@ -36,7 +37,8 @@ O frontend e o backend são aplicações independentes. O frontend autentica o u
 | Camada | Responsabilidade | Entrada/saída principal |
 |---|---|---|
 | Next.js | Sessão, fila, progresso e download | Arquivos do usuário e Blob retornado pela API |
-| FastAPI/router | Orquestração, erros e resposta HTTP | Multipart e XLSX/CSV |
+| FastAPI/router | Validação HTTP, autenticação, erros e resposta | Multipart e XLSX/CSV |
+| Serviço de aplicação | Orquestração do pipeline e progresso | Arquivos e linhas normalizadas |
 | Extração | Leitura de PDF, DOC e DOCX | Bytes e blocos textuais/visuais |
 | Parser local | Categoria, escopo, item e palavras-chave | Blocos estruturados |
 | Supabase | Auth, perfil e regras configuráveis | JWT, perfil e `parser_rules` |
@@ -49,17 +51,14 @@ O progresso fica em memória no processo FastAPI e expira após uma hora. Reinic
 
 Os arquivos são processados durante a própria requisição. Não existe fila persistente, worker separado ou histórico de execuções.
 
-## Caminho ativo e código legado
+## Caminho ativo
 
-O endpoint atual usa `routers/extracao_pdf.py`, `document_service.py`, `pdf_service.py`, `parser_rules_service.py`, `llm_service.py`, `matrix_structure_service.py`, `normalizer_service.py`, `xlsx_service.py` e `csv_service.py`.
-
-`extraction_service.py`, `file_extractor.py`, `parser_rules.py`, `ai_service.py`, `markdown_converter.py` e `csv_generator.py` formam um fluxo anterior. Eles não são chamados pelas rotas atuais, embora parte deles ainda tenha testes. Não implemente novas regras nesse caminho sem antes decidir se ele será removido ou reativado.
+O endpoint atual usa `routers/extracao_pdf.py` somente como adaptador HTTP. A orquestração está em `extraction_pipeline_service.py`, que depende de contratos pequenos para carregar regras e converter blocos. Extração, classificação, regras, LLM, hierarquia, normalização e geração de arquivos permanecem em serviços próprios.
 
 ## Limitações conhecidas
 
 - PDF sem camada de texto não possui OCR.
 - O progresso não é persistente nem distribuído.
-- A API ainda não aplica a função existente de validação do JWT às rotas.
 - O schema completo do Supabase ainda não possui migrations reproduzíveis no repositório.
 - O frontend não possui suíte automatizada nem lint configurado.
 

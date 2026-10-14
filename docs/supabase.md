@@ -88,7 +88,6 @@ Até que as migrations sejam criadas:
 ## Pendências confirmadas
 
 - O frontend consulta `profiles.role`, mas a coluna atual é `cargo`.
-- O helper de autenticação da API não está ligado às rotas.
 - Não há migrations completas versionadas.
 - Advisors apontam funções privilegiadas que exigem revisão de `EXECUTE` e políticas permissivas de SELECT sobrepostas.
 

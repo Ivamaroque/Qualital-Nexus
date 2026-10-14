@@ -608,10 +608,6 @@ def extrair_texto_e_imagens_pdf(
         raise ValueError("Não foi possível extrair texto do PDF.") from exc
 
 
-def extrair_texto_pdf(pdf_bytes: bytes) -> str:
-    """Mantém o contrato legado de extração exclusivamente textual."""
-    return extrair_texto_e_imagens_pdf(pdf_bytes)[0]
-
 def limpar_texto_pdf(texto: str) -> str:
     linhas_limpas: list[str] = []
     marcador_lista_pendente = False
